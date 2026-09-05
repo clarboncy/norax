@@ -1,0 +1,11 @@
+[Unit]
+Description=Probe connectivity and recover Norax promptly
+
+[Timer]
+OnBootSec=20s
+OnUnitActiveSec=30s
+AccuracySec=2s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

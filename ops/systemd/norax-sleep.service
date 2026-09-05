@@ -1,0 +1,21 @@
+# Default checkout: %h/norax. For another location, override WorkingDirectory,
+# EnvironmentFile, and ExecStart together in a systemd drop-in.
+[Unit]
+Description=Norax AI — offline sleep-flush worker (consolidates memory/sleep/ into canonical stores)
+# Skip if the runtime isn't active — nothing to flush
+ConditionPathExists=%h/.local/share/norax/memory/sleep
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/norax
+EnvironmentFile=-%h/norax/.env
+Environment=NORAX_LOG_JSON=1
+Environment=NORAX_MEMORY_ROOT=%h/.local/share/norax/memory
+Environment=NORAX_STATE_DIR=%h/.local/state/norax
+Environment=NORAX_LOG_DIR=%h/.local/state/norax/logs
+ExecStart=%h/norax/.venv/bin/python -m norax.sleep --json
+StandardOutput=append:%h/.local/state/norax/logs/norax-sleep.log
+StandardError=append:%h/.local/state/norax/logs/norax-sleep.log
+Nice=10
+# Idempotent; safe to re-run on failure
+Restart=no

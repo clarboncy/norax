@@ -1,0 +1,10 @@
+# Default checkout: %h/norax. Override ExecStart in a drop-in for another path.
+[Unit]
+Description=Norax DNS staleness check (noraxdev.org)
+Documentation=https://noraxdev.org/admin.html
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/norax/scripts/dns_health_check.sh

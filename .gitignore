@@ -1,0 +1,130 @@
+# env / secrets
+.env
+*.pem
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage-branch.json
+htmlcov/
+
+# model files
+*.gguf
+*.bin
+*.pt
+*.ckpt
+
+# caches
+.cache/
+node_modules/
+
+# benchmark runs
+benchmarks/runs/
+
+# state — not committed
+state/
+logs/
+
+# uv
+uv.lock.bak
+
+# volatile memory archives / rolling windows
+/memory/
+memory/sleep/archive/
+memory/state/
+memory/remote/jobs.jsonl
+memory/remote/nodes.json
+
+# mutable runtime state — not source artifacts
+memory/active-focus.md
+memory/active_inference.json
+memory/causal_graph.json
+memory/embed_cache.npz
+memory/embed_cache_external.npz
+memory/checkpoints/
+memory/episodic/
+memory/gateway/
+memory/intel/
+memory/procedural/
+memory/semantic/users/
+memory/.action_gate.json
+state/*.pid
+
+# local build artifacts
+dist/
+tmp/
+.work/
+artifacts/
+coverage.json
+norax/data/perception_profile.json
+.norax.lock
+*.screen.png
+*-screen.png
+emulator_screen.png
+Dedicated_Server.txt
+intel.txt
+models/
+/datasets/
+docs/jellyfin-stack-guide.md
+docs/norax2-media-runbook.md
+docs/windsurf_console_reaudit_*.md
+docs/release-hardening-*.md
+ops/media/
+unsloth_compiled_cache/
+training/venv/
+training/unsloth_compiled_cache/
+training/**/__pycache__/
+training/checkpoints/
+training/outputs/
+training/*.log
+training/dataset_build/*.jsonl
+training/dataset_build/dataset_metadata.json
+
+# secrets — never commit
+memory/remote/control.token
+memory/remote/relay.log
+*.token
+!norax/safety/secrets.py
+!scripts/secret_scan.py
+!scripts/redact_memory_secrets.py
+
+# large binary memory files
+memory/index/norax_memory.sqlite
+memory/index/norax_memory.sqlite-shm
+memory/index/norax_memory.sqlite-wal
+memory/index/index_meta.json
+memory/entity_graph.json
+memory/temporal_graph.json
+memory/consolidated-*.md
+memory/perception_profile.json
+
+# backups
+backups/
+
+# patch / reject files
+*.patch
+*.rej
+
+# semantic memory scratch (runtime-generated)
+semantic/
+scripts/verify_cursor_driver_e2e.py
+
+# Private gateway modules (not part of public release)
+norax/gateway_client/cursor_acp.py
+norax/gateway_client/cursor_governance.py
+norax/gateway_client/cursor_observability.py
+gateway_provider/cursor_acp.py
+tests/unit/test_cursor_acp_gateway.py
+tests/unit/test_cursor_tool_workaround.py
+tests/unit/test_cursor_world_class.py
+memory/procedural/cursor_acp_enhancements_2026-06-04.md
+tools/perception_profile.py
+tools/swagbucks.py
+tools/swagbucks_automation.py
+tools/swagbucks_cdp.py

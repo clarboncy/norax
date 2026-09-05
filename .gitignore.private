@@ -1,0 +1,14 @@
+# Private runtime .gitignore — tracks everything except caches and build artifacts
+__pycache__/
+*.pyc
+.venv/
+node_modules/
+*.egg-info/
+dist/
+build/
+.git/
+memory/index/*.sqlite-shm
+memory/index/*.sqlite-wal
+memory/embed_cache*.npz
+*.bak
+*.bak-*

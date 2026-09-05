@@ -1,0 +1,15 @@
+# Prometheus scrape fragment for a Norax AI host.
+# Include from your main prometheus.yml under scrape_configs:.
+#
+# The Norax runtime binds 127.0.0.1:4101 by default. To scrape from
+# another host, change `http.bind` in config/runtime.jsonc to your
+# network IP and use that here.
+
+- job_name: norax
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  metrics_path: /metrics
+  static_configs:
+    - targets: ['127.0.0.1:4101']
+      labels:
+        service: norax-ai

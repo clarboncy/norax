@@ -1,0 +1,463 @@
+"""Prediction Network — prospective retrieval and context pre-fetching.
+
+Predicts likely next topics/questions and pre-fetches relevant memory
+before the user even asks. Makes retrieval feel prescient and reduces
+the cognitive load on the model by having context ready.
+
+Zero LLM calls. Uses:
+  1. Conversation trajectory analysis (what topics are escalating?)
+  2. Tool usage patterns (what tools are being used → what comes next?)
+  3. Temporal patterns (what time of day → what kind of request?)
+  4. Entity co-occurrence (entities mentioned together → likely next entities)
+  5. Task transition matrix (coding → testing → deployment)
+
+Usage:
+    pn = PredictionNetwork(memory_store, entity_graph)
+    pn.load()
+    predictions = pn.predict_next(user_request, tool_trace, conversation_history)
+    # predictions: [{"topic": "testing", "confidence": 0.8, "entities": ["pytest", "coverage"]}]
+    prefetched = pn.prefetch(predictions)
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import re
+from collections import defaultdict, deque
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from ..atomic import atomic_write_text
+
+log = logging.getLogger("norax.brain.prediction_network")
+
+
+@dataclass
+class Prediction:
+    topic: str
+    confidence: float
+    entities: list[str] = field(default_factory=list)
+    reasoning: str = ""
+    memory_keys: list[str] = field(default_factory=list)
+
+
+@dataclass
+class TransitionStats:
+    """Tracks transitions from one task type to another."""
+
+    transitions: dict[str, dict[str, int]] = field(
+        default_factory=lambda: defaultdict(lambda: defaultdict(int))
+    )
+    total: int = 0
+
+    def record(self, from_task: str, to_task: str) -> None:
+        self.transitions[from_task][to_task] += 1
+        self.total += 1
+
+    def predict(self, from_task: str, top_k: int = 3) -> list[tuple[str, float]]:
+        """Given current task, predict likely next tasks."""
+        if from_task not in self.transitions:
+            return []
+        total_from = sum(self.transitions[from_task].values())
+        if total_from == 0:
+            return []
+        ranked = [
+            (to_task, count / total_from) for to_task, count in self.transitions[from_task].items()
+        ]
+        ranked.sort(key=lambda x: x[1], reverse=True)
+        return ranked[:top_k]
+
+
+# Task type classification (simplified — reuses self_model's domain logic)
+_TASK_KEYWORDS: dict[str, set[str]] = {
+    "coding": {
+        "code",
+        "implement",
+        "function",
+        "class",
+        "bug",
+        "fix",
+        "debug",
+        "error",
+        "handling",
+        "python",
+        "bash",
+        "script",
+        "refactor",
+        "patch",
+        "deploy",
+        "compile",
+    },
+    "testing": {
+        "test",
+        "pytest",
+        "unittest",
+        "verify",
+        "validation",
+        "coverage",
+        "assert",
+        "mock",
+        "fixture",
+        "integration",
+    },
+    "research": {
+        "search",
+        "find",
+        "research",
+        "investigate",
+        "analyze",
+        "compare",
+        "study",
+        "look up",
+        "query",
+        "web",
+    },
+    "memory": {
+        "remember",
+        "recall",
+        "store",
+        "consolidate",
+        "forget",
+        "learn",
+        "entity",
+        "graph",
+        "memory",
+    },
+    "ops": {
+        "deploy",
+        "restart",
+        "service",
+        "systemctl",
+        "config",
+        "server",
+        "port",
+        "process",
+        "monitor",
+        "health",
+        "status",
+    },
+    "planning": {
+        "plan",
+        "schedule",
+        "task",
+        "decompose",
+        "orchestrate",
+        "strategy",
+        "prioritize",
+        "organize",
+        "roadmap",
+    },
+    "communication": {
+        "send",
+        "message",
+        "notify",
+        "alert",
+        "discord",
+        "channel",
+        "reply",
+        "chat",
+        "respond",
+    },
+}
+
+
+def _classify_task(text: str) -> str:
+    text_lower = (text or "").lower()
+    scores: dict[str, int] = {}
+    for task, keywords in _TASK_KEYWORDS.items():
+        score = sum(1 for kw in keywords if kw in text_lower)
+        if score > 0:
+            scores[task] = score
+    if not scores:
+        return "general"
+    return max(scores, key=lambda k: scores[k])
+
+
+# Task transition matrix — learned patterns
+_DEFAULT_TRANSITIONS = {
+    "coding": {"testing": 0.35, "coding": 0.25, "ops": 0.20, "research": 0.10, "planning": 0.10},
+    "testing": {"coding": 0.30, "ops": 0.25, "testing": 0.20, "planning": 0.15, "research": 0.10},
+    "research": {
+        "coding": 0.30,
+        "planning": 0.25,
+        "research": 0.20,
+        "memory": 0.15,
+        "communication": 0.10,
+    },
+    "memory": {"coding": 0.20, "research": 0.20, "planning": 0.20, "memory": 0.20, "ops": 0.20},
+    "ops": {"testing": 0.25, "ops": 0.25, "coding": 0.20, "planning": 0.15, "communication": 0.15},
+    "planning": {
+        "coding": 0.35,
+        "ops": 0.20,
+        "planning": 0.15,
+        "research": 0.15,
+        "communication": 0.15,
+    },
+    "communication": {
+        "coding": 0.20,
+        "research": 0.20,
+        "planning": 0.20,
+        "ops": 0.20,
+        "communication": 0.20,
+    },
+}
+
+
+class PredictionNetwork:
+    """Prospective retrieval and context pre-fetching."""
+
+    def __init__(
+        self,
+        memory_store: Any = None,
+        entity_graph: Any = None,
+        state_path: Path | str = "~/norax/memory/prediction_network.json",
+    ):
+        self.memory_store = memory_store
+        self.entity_graph = entity_graph
+        self.state_path = Path(state_path).expanduser()
+        self.transition_stats = TransitionStats()
+        self.entity_cooccurrence: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+        self.topic_history: deque[str] = deque(maxlen=20)
+        self.last_episode_timestamp: float = 0.0
+        self._loaded = False
+
+    def load(self) -> None:
+        if self.state_path.exists():
+            try:
+                data = json.loads(self.state_path.read_text())
+                # Load transition stats
+                for from_task, to_dict in data.get("transitions", {}).items():
+                    for to_task, count in to_dict.items():
+                        parsed_count = max(0, int(count))
+                        self.transition_stats.transitions[from_task][to_task] = parsed_count
+                        self.transition_stats.total += parsed_count
+                # Load entity co-occurrence
+                for entity, related in data.get("entity_cooccurrence", {}).items():
+                    for related_entity, count in related.items():
+                        self.entity_cooccurrence[entity][related_entity] = count
+                # Load topic history
+                self.topic_history.extend(data.get("topic_history", []))
+                self.last_episode_timestamp = float(data.get("last_episode_timestamp", 0.0))
+                log.info(
+                    "prediction_network loaded: %d transitions, %d entities",
+                    self.transition_stats.total,
+                    len(self.entity_cooccurrence),
+                )
+            except Exception as e:
+                log.warning("prediction_network load failed: %r", e)
+        self._loaded = True
+
+    def save(self) -> None:
+        data = {
+            "transitions": {k: dict(v) for k, v in self.transition_stats.transitions.items()},
+            "entity_cooccurrence": {k: dict(v) for k, v in self.entity_cooccurrence.items()},
+            "topic_history": list(self.topic_history),
+            "last_episode_timestamp": self.last_episode_timestamp,
+        }
+        self.state_path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(self.state_path, json.dumps(data, indent=2))
+
+    def record_turn(
+        self,
+        user_request: str,
+        task_type: str = "",
+        entities: list[str] | None = None,
+    ) -> None:
+        """Record a completed turn for learning."""
+        task = task_type or _classify_task(user_request)
+        # Record transition from previous task
+        if self.topic_history:
+            prev_task = self.topic_history[-1]
+            if prev_task != task:
+                self.transition_stats.record(prev_task, task)
+        self.topic_history.append(task)
+        # Record entity co-occurrence
+        if entities and len(entities) >= 2:
+            for i, e1 in enumerate(entities):
+                for e2 in entities[i + 1 :]:
+                    self.entity_cooccurrence[e1][e2] += 1
+                    self.entity_cooccurrence[e2][e1] += 1
+
+    def record_episodes(self, episodes: list[Any]) -> int:
+        """Record only episodes newer than the durable replay watermark."""
+        unseen = sorted(
+            (
+                episode
+                for episode in episodes
+                if float(getattr(episode, "timestamp", 0.0) or 0.0) > self.last_episode_timestamp
+            ),
+            key=lambda episode: float(getattr(episode, "timestamp", 0.0) or 0.0),
+        )
+        for episode in unseen:
+            self.record_turn(
+                getattr(episode, "user_input", "") or "",
+                task_type=getattr(episode, "task_type", "") or "",
+            )
+        if unseen:
+            self.last_episode_timestamp = max(
+                float(getattr(episode, "timestamp", 0.0) or 0.0) for episode in unseen
+            )
+        return len(unseen)
+
+    def predict_next(
+        self,
+        user_request: str = "",
+        tool_trace: list[dict] | None = None,
+        conversation_history: list[dict] | None = None,
+        top_k: int = 3,
+    ) -> list[Prediction]:
+        """Predict likely next topics and pre-fetchable entities."""
+        predictions: list[Prediction] = []
+        tool_trace = tool_trace or []
+        conversation_history = conversation_history or []
+
+        # 1. Task transition prediction
+        current_task = (
+            _classify_task(user_request)
+            if user_request
+            else (self.topic_history[-1] if self.topic_history else "general")
+        )
+
+        # Use learned transitions if we have enough data, otherwise use defaults
+        if self.transition_stats.total >= 10:
+            transitions = self.transition_stats.predict(current_task, top_k)
+        else:
+            # Use default transition matrix
+            defaults = _DEFAULT_TRANSITIONS.get(current_task, {})
+            transitions = sorted(defaults.items(), key=lambda x: x[1], reverse=True)[:top_k]
+
+        for next_task, prob in transitions:
+            predictions.append(
+                Prediction(
+                    topic=next_task,
+                    confidence=prob,
+                    reasoning=f"task_transition: {current_task}→{next_task}",
+                )
+            )
+
+        # 2. Entity co-occurrence prediction
+        # Extract entities from current request
+        current_entities = self._extract_entities(user_request, tool_trace)
+        if current_entities and self.entity_cooccurrence:
+            for entity in current_entities[:3]:
+                if entity in self.entity_cooccurrence:
+                    related = sorted(
+                        self.entity_cooccurrence[entity].items(),
+                        key=lambda x: x[1],
+                        reverse=True,
+                    )[:3]
+                    for related_entity, count in related:
+                        cooccurrence_prob = min(1.0, count / 10)
+                        predictions.append(
+                            Prediction(
+                                topic=f"entity:{related_entity}",
+                                confidence=cooccurrence_prob
+                                * 0.6,  # lower confidence than task transitions
+                                entities=[related_entity],
+                                reasoning=f"co-occurrence: {entity}→{related_entity} ({count}x)",
+                            )
+                        )
+
+        # 3. Tool pattern prediction
+        if tool_trace:
+            tool_names = [t.get("name", "") for t in tool_trace]
+            # If we see read+edit, predict testing next
+            if (
+                "read" in tool_names
+                and "edit" in tool_names
+                and "testing" not in [p.topic for p in predictions]
+            ):
+                predictions.append(
+                    Prediction(
+                        topic="testing",
+                        confidence=0.5,
+                        reasoning="tool_pattern: read+edit→testing",
+                    )
+                )
+            # If we see web_search, predict coding next
+            if "web_search" in tool_names and "coding" not in [p.topic for p in predictions]:
+                predictions.append(
+                    Prediction(
+                        topic="coding",
+                        confidence=0.4,
+                        reasoning="tool_pattern: web_search→coding",
+                    )
+                )
+
+        # 4. Conversation trajectory analysis
+        if len(conversation_history) >= 3:
+            recent_tasks = [
+                _classify_task(m.get("content", "") if isinstance(m, dict) else str(m))
+                for m in conversation_history[-3:]
+            ]
+            # If we're in a sequence of the same task, likely to continue
+            if len(set(recent_tasks)) == 1 and recent_tasks[0] != "general":
+                predictions.append(
+                    Prediction(
+                        topic=recent_tasks[0],
+                        confidence=0.7,
+                        reasoning=f"trajectory: 3 consecutive {recent_tasks[0]} turns",
+                    )
+                )
+
+        # Sort by confidence and deduplicate
+        predictions.sort(key=lambda p: p.confidence, reverse=True)
+        seen: set[str] = set()
+        unique: list[Prediction] = []
+        for p in predictions:
+            if p.topic not in seen:
+                seen.add(p.topic)
+                unique.append(p)
+        return unique[:top_k]
+
+    def prefetch(self, predictions: list[Prediction]) -> dict[str, Any]:
+        """Pre-fetch memory for predicted topics."""
+        results: dict[str, Any] = {}
+        if not self.memory_store:
+            return results
+
+        for pred in predictions:
+            try:
+                # Search memory for predicted topic
+                topic = pred.topic.replace("entity:", "")
+                # Use memory store's search if available
+                if hasattr(self.memory_store, "search"):
+                    hits = self.memory_store.search(topic, k=3)
+                    if hits:
+                        results[pred.topic] = hits
+                elif hasattr(self.memory_store, "semantic"):
+                    # Fallback: scan semantic memory for topic keywords
+                    hits = []
+                    for line in self.memory_store.semantic:
+                        if topic.lower() in line.lower():
+                            hits.append(line)
+                    if hits:
+                        results[pred.topic] = hits[:3]
+            except Exception as e:
+                log.debug("prefetch failed for %s: %r", pred.topic, e)
+        return results
+
+    def _extract_entities(self, text: str, tool_trace: list[dict]) -> list[str]:
+        """Extract entity-like terms from text and tool trace."""
+        entities: list[str] = []
+        # File paths
+        for m in re.finditer(r"\b([a-z_]+\.py|[a-z_]+\.js|[a-z_]+\.ts)\b", text):
+            entities.append(m.group(1))
+        # Capitalized terms (likely proper nouns / entity names)
+        for m in re.finditer(r"\b([A-Z][a-z]{2,})\b", text):
+            entities.append(m.group(1))
+        # Tool names from trace
+        for t in tool_trace:
+            name = t.get("name", "")
+            if name:
+                entities.append(name)
+        return list(dict.fromkeys(entities))  # dedupe preserving order
+
+    def summary(self) -> str:
+        return (
+            f"PredictionNetwork: {self.transition_stats.total} transitions recorded, "
+            f"{len(self.entity_cooccurrence)} entities tracked, "
+            f"topic_history={list(self.topic_history)[-5:]}"
+        )

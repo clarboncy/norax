@@ -1,0 +1,43 @@
+# Default checkout: %h/norax. For another location, override WorkingDirectory,
+# EnvironmentFile, and ExecStart together in a systemd drop-in.
+[Unit]
+Description=Norax AI — ground-up agent runtime
+After=network-online.target
+Wants=network-online.target
+StartLimitBurst=10
+StartLimitIntervalSec=120
+
+[Service]
+Type=simple
+WorkingDirectory=%h/norax
+EnvironmentFile=%h/norax/.env
+Environment=NORAX_LOG_JSON=1
+Environment=NORAX_MEMORY_ROOT=%h/.local/share/norax/memory
+Environment=NORAX_STATE_DIR=%h/.local/state/norax
+Environment=NORAX_LOG_DIR=%h/.local/state/norax/logs
+Environment=NORAX_CHECKPOINT_DIR=%h/.local/share/norax/memory/checkpoints
+# Dedicated local embedding endpoint used by this deployment profile.
+Environment=NORAX_EMBED_URL=http://127.0.0.1:11436
+Environment=NORAX_EMBED_MODEL=norax-embed-v3:latest
+# Prove the configured model route with a minimal exact response. The
+# runtime defers this low-frequency probe while user turns have capacity.
+Environment=NORAX_COMPLETION_PROBE_MODE=completion
+Environment=NORAX_COMPLETION_PROBE_INTERVAL_SECONDS=600
+Environment=NORAX_COMPLETION_PROBE_IDLE_SECONDS=30
+# Display/session variables — uncomment and adjust for your environment:
+# Environment=DISPLAY=:1
+# Environment=WAYLAND_DISPLAY=wayland-1
+# Environment=XDG_SESSION_TYPE=wayland
+Environment=XDG_RUNTIME_DIR=/run/user/%U
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus
+ExecStart=%h/norax/.venv/bin/python -m norax
+Restart=always
+RestartSec=3
+StandardOutput=append:%h/.local/state/norax/logs/norax-ai.log
+StandardError=append:%h/.local/state/norax/logs/norax-ai.log
+# Graceful shutdown window matches runtime.shutdown_grace_seconds + buffer
+TimeoutStopSec=30
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=default.target

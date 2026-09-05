@@ -1,0 +1,35 @@
+# Fleet Healthcheck — check definitions (example config)
+# Format: name<TAB>kind<TAB>target<TAB>restart_unit<TAB>critical
+# kind: http | tcp | ollama_model | systemd | gpu_ram | disk | proc
+# restart_unit: "-" to skip auto-restart, or a systemd --user unit name
+# critical: 1 = alert aggressively, 0 = informational only
+#
+# Ollama embeddings (primary memory backend)
+embed-11436	http	http://127.0.0.1:11436/api/tags	ollama-embeddings.service	1
+embed-model-loaded	ollama_model	http://127.0.0.1:11436|norax-embed-v3	ollama-embeddings.service	1
+#
+# Ollama cloud models
+ollama-cloud-11434	http	http://127.0.0.1:11434/api/tags	-	1
+#
+# llama.cpp DFlash2 — local Qwen 3.8 27B inference
+ollama-local-11435	http	http://127.0.0.1:11435/health	llama-dflash.service	1
+#
+# Tailscale forwarders for norax2
+forward-cloud-19136	tcp	100.67.70.53:19136	ollama-forward.service	0
+forward-local-19137	tcp	100.67.70.53:19137	ollama-forward.service	0
+#
+# Browser CDP (used by browser automation)
+browser-cdp-9222	http	http://127.0.0.1:9222/json/version	chrome-cdp.service	0
+#
+# Norax AI runtime stack
+norax-ai	systemd	norax-ai.service	norax-ai.service	1
+norax-remote-relay	systemd	norax-remote-relay.service	norax-remote-relay.service	1
+#
+# Brain daemon intentionally omitted: background autonomy is disabled. Prompted
+# Norax turns run inside norax-ai.service and do not depend on this daemon.
+#
+# GPU health (optional — remove if no GPU)
+gpu0-driver	gpu_ram	0	-	1
+#
+# Disk (warn at 90%)
+disk-root	disk	/|90	-	1

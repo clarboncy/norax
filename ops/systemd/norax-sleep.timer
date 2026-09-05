@@ -1,0 +1,14 @@
+[Unit]
+Description=Norax AI — run sleep-flush hourly during idle windows
+Requires=norax-sleep.service
+
+[Timer]
+# Every hour at :17 (odd minute → no collision with typical :00 / :30 jobs)
+OnCalendar=*-*-* *:17:00
+# If missed (system off), run on next boot
+Persistent=true
+AccuracySec=60s
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

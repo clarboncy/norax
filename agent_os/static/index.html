@@ -1,0 +1,1142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#0a0a0f">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Norax Agent OS</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+:root{
+  --bg:#0a0a0f; --bg2:#100d18; --panel:#15111f; --panel2:#1e1830;
+  --border:#2a223d; --border2:#3a3055;
+  --accent:#a855f7; --accent2:#7c3aed; --accent3:#c084fc;
+  --green:#00e88f; --red:#ff5577; --amber:#ffaa00;
+  --text:#e8e4f0; --dim:#8b7fa8; --dimmer:#4a3f5c;
+  --mono:'JetBrains Mono',ui-monospace,monospace;
+  --sans:'Inter',system-ui,-apple-system,sans-serif;
+  --glow:0 0 20px rgba(168,85,247,.18);
+  --glow2:0 0 20px rgba(124,58,237,.15);
+  --radius:14px;
+  --safe-top:env(safe-area-inset-top,0px);
+  --safe-bot:env(safe-area-inset-bottom,0px);
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;overscroll-behavior:none}
+body{
+  background:var(--bg);color:var(--text);font-family:var(--sans);
+  font-size:14px;overflow:hidden;
+  -webkit-font-smoothing:antialiased;
+}
+body::before{
+  content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
+  background:
+    radial-gradient(ellipse 80% 50% at 20% 0%,rgba(168,85,247,.07),transparent 60%),
+    radial-gradient(ellipse 60% 40% at 80% 100%,rgba(124,58,237,.05),transparent 60%);
+}
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px}
+::-webkit-scrollbar-track{background:transparent}
+
+/* ===== Layout ===== */
+#app{display:flex;height:100vh;height:100dvh;position:relative;z-index:1}
+
+/* ===== Sidebar ===== */
+#side{
+  width:240px;min-width:240px;
+  background:linear-gradient(180deg,var(--bg2),var(--bg));
+  border-right:1px solid var(--border);
+  display:flex;flex-direction:column;
+  transition:transform .28s cubic-bezier(.4,0,.2,1);
+  z-index:100;
+}
+#logo{padding:20px 18px 16px;border-bottom:1px solid var(--border)}
+#logo h1{
+  font-size:17px;letter-spacing:3px;font-weight:700;
+  background:linear-gradient(90deg,var(--accent3),var(--accent));
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+}
+#logo .sub{font-size:10px;color:var(--dim);letter-spacing:3px;margin-top:4px;font-family:var(--mono)}
+#pulse{display:inline-block;width:7px;height:7px;border-radius:50%;
+  background:var(--green);box-shadow:0 0 8px var(--green);
+  animation:pulse 2s infinite;margin-right:6px;vertical-align:1px}
+@keyframes pulse{50%{opacity:.35}}
+#nav{flex:1;padding:12px 10px;overflow-y:auto}
+.nav-item{
+  display:flex;align-items:center;gap:12px;padding:11px 14px;margin:3px 0;
+  border-radius:10px;cursor:pointer;color:var(--dim);font-size:13px;
+  font-weight:500;border:1px solid transparent;transition:all .15s;
+}
+.nav-item:hover{color:var(--text);background:var(--panel)}
+.nav-item.active{
+  color:var(--accent);background:var(--panel2);border-color:var(--border2);
+  box-shadow:var(--glow);
+}
+.nav-item .ico{font-size:16px;width:20px;text-align:center}
+#side .foot{padding:14px;border-top:1px solid var(--border);font-size:10px;color:var(--dimmer);font-family:var(--mono)}
+#side .foot span{color:var(--dim)}
+
+/* ===== Main ===== */
+#main{flex:1;display:flex;flex-direction:column;min-width:0}
+#topbar{
+  height:54px;min-height:54px;border-bottom:1px solid var(--border);
+  display:flex;align-items:center;gap:12px;padding:0 18px;
+  background:rgba(16,13,24,.8);backdrop-filter:blur(12px);
+  padding-top:calc(var(--safe-top) + 0px);
+  height:calc(54px + var(--safe-top));
+}
+#menu-btn{display:none;background:none;border:none;color:var(--text);font-size:22px;cursor:pointer;padding:4px}
+#topbar h2{font-size:14px;letter-spacing:2px;color:var(--text);font-weight:600}
+#topbar .crumb{color:var(--dimmer);font-size:11px;font-family:var(--mono)}
+.badge{
+  font-size:10px;padding:4px 10px;border-radius:20px;letter-spacing:1px;
+  border:1px solid var(--border2);color:var(--dim);font-weight:600;
+}
+.badge.ok{color:var(--green);border-color:rgba(0,232,143,.4)}
+.badge.bad{color:var(--red);border-color:rgba(255,85,119,.4)}
+#clock{margin-left:auto;color:var(--dim);font-size:11px;font-family:var(--mono)}
+#views{flex:1;overflow-y:auto;padding:18px;position:relative;-webkit-overflow-scrolling:touch}
+.view{display:none;animation:fade .25s}
+.view.active{display:block}
+@keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+
+/* ===== Dashboard ===== */
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px}
+.card{
+  background:linear-gradient(160deg,var(--panel),var(--bg2));
+  border:1px solid var(--border);border-radius:var(--radius);padding:18px;
+  position:relative;overflow:hidden;
+}
+.card::before{
+  content:"";position:absolute;top:0;left:0;right:0;height:2px;
+  background:linear-gradient(90deg,var(--accent),transparent 70%);opacity:.5;
+}
+.card h3{font-size:11px;letter-spacing:2px;color:var(--dim);margin-bottom:14px;text-transform:uppercase;font-weight:600}
+.stat-row{display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px dashed rgba(42,34,61,.6);font-size:13px}
+.stat-row:last-child{border:none}
+.stat-row .k{color:var(--dim)}
+.stat-row .v{color:var(--text);font-family:var(--mono);font-size:12px}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:8px}
+.dot.g{background:var(--green);box-shadow:0 0 6px var(--green)}
+.dot.r{background:var(--red);box-shadow:0 0 6px var(--red)}
+.dot.a{background:var(--amber);box-shadow:0 0 6px var(--amber)}
+.bar{height:5px;background:var(--bg);border-radius:3px;overflow:hidden;margin-top:4px}
+.bar>i{display:block;height:100%;border-radius:3px;
+  background:linear-gradient(90deg,var(--accent),var(--accent2));transition:width .6s}
+.svc{display:flex;align-items:center;padding:6px 0;font-size:12px}
+.svc .nm{flex:1;color:var(--text)}
+.svc button{
+  background:none;border:1px solid var(--border2);color:var(--dim);
+  border-radius:6px;padding:3px 9px;font-family:var(--mono);font-size:10px;
+  cursor:pointer;margin-left:4px;min-width:32px;
+}
+.svc button:hover{color:var(--accent);border-color:var(--accent)}
+.big-num{font-size:28px;font-weight:700;color:var(--accent);text-shadow:var(--glow)}
+canvas{max-height:110px}
+
+/* ===== Chat ===== */
+#chat-wrap{display:flex;gap:14px;height:calc(100dvh - 92px - var(--safe-top) - var(--safe-bot))}
+#chat-main{flex:1;display:flex;flex-direction:column;background:var(--panel);
+  border:1px solid var(--border);border-radius:var(--radius);min-width:0;overflow:hidden}
+#chat-controls{display:flex;gap:8px;padding:10px 12px;border-bottom:1px solid var(--border);flex-wrap:wrap;align-items:center}
+select,input[type=text],input[type=password]{
+  background:var(--bg);border:1px solid var(--border2);color:var(--text);
+  border-radius:8px;padding:8px 12px;font-family:var(--mono);font-size:13px;outline:none;
+  min-height:36px;
+}
+select:focus,input:focus{border-color:var(--accent)}
+#chat-log{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:14px;-webkit-overflow-scrolling:touch;scroll-behavior:smooth}
+
+/* Message bubbles */
+.msg{max-width:78%;position:relative;animation:msgIn .3s ease-out}
+@keyframes msgIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.msg-header{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.msg-avatar{
+  width:26px;height:26px;border-radius:8px;display:flex;align-items:center;justify-content:center;
+  font-size:13px;font-weight:700;flex-shrink:0;
+}
+.msg.user .msg-avatar{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff}
+.msg.assistant .msg-avatar{background:var(--panel2);border:1px solid var(--border2);color:var(--accent3)}
+.msg-meta{display:flex;align-items:center;gap:8px;flex:1;min-width:0}
+.msg-who{font-size:11px;font-weight:600;letter-spacing:.5px;color:var(--text)}
+.msg-time{font-size:9.5px;color:var(--dimmer);font-family:var(--mono)}
+.msg-body{
+  padding:10px 14px;border-radius:14px;word-break:break-word;line-height:1.6;font-size:13.5px;
+}
+.msg.user .msg-body{
+  background:linear-gradient(135deg,rgba(168,85,247,.14),rgba(124,58,237,.06));
+  border:1px solid rgba(168,85,247,.25);border-bottom-right-radius:4px;
+  color:var(--text);
+}
+.msg.assistant .msg-body{
+  background:var(--panel2);border:1px solid var(--border);border-bottom-left-radius:4px;
+  color:var(--text);
+}
+.msg-actions{display:flex;gap:4px;margin-top:4px;opacity:0;transition:opacity .15s}
+.msg:hover .msg-actions{opacity:1}
+.msg-act-btn{
+  background:none;border:none;color:var(--dimmer);cursor:pointer;font-size:10px;
+  padding:2px 6px;border-radius:4px;font-family:var(--mono);
+}
+.msg-act-btn:hover{color:var(--accent);background:var(--panel2)}
+
+/* Streaming cursor */
+.stream-cursor{display:inline-block;width:8px;height:15px;background:var(--accent);
+  border-radius:2px;animation:blink 1s steps(2) infinite;vertical-align:text-bottom;margin-left:2px}
+@keyframes blink{50%{opacity:0}}
+
+/* Thinking bubble */
+.msg.thinking .msg-body{display:flex;align-items:center;gap:9px;min-width:120px;color:var(--dim)}
+.working-dots{display:inline-flex;align-items:center;gap:4px;height:14px}
+.working-dots i{display:block;width:6px;height:6px;border-radius:50%;background:var(--accent);animation:workingDot 1.15s infinite ease-in-out}
+.working-dots i:nth-child(2){animation-delay:.16s}.working-dots i:nth-child(3){animation-delay:.32s}
+@keyframes workingDot{0%,60%,100%{opacity:.3;transform:translateY(0)}30%{opacity:1;transform:translateY(-4px)}}
+
+/* Markdown inside messages */
+.msg-body h1,.msg-body h2,.msg-body h3{margin:10px 0 6px;font-weight:600;line-height:1.3}
+.msg-body h1{font-size:17px}.msg-body h2{font-size:15px}.msg-body h3{font-size:14px}
+.msg-body p{margin:6px 0}
+.msg-body ul,.msg-body ol{margin:6px 0;padding-left:20px}
+.msg-body li{margin:3px 0}
+.msg-body strong{color:var(--accent3);font-weight:600}
+.msg-body em{font-style:italic;color:var(--text)}
+.msg-body a{color:var(--accent);text-decoration:none;border-bottom:1px solid rgba(168,85,247,.3)}
+.msg-body a:hover{border-bottom-color:var(--accent)}
+.msg-body blockquote{
+  border-left:3px solid var(--accent2);padding:4px 12px;margin:8px 0;
+  background:rgba(124,58,237,.06);border-radius:0 8px 8px 0;color:var(--dim);
+}
+.msg-body code{
+  background:var(--bg);border:1px solid var(--border);border-radius:4px;
+  padding:1px 5px;font-family:var(--mono);font-size:12px;color:var(--accent3);
+}
+.msg-body pre{
+  background:var(--bg);border:1px solid var(--border);border-radius:10px;
+  padding:12px 14px;overflow-x:auto;margin:8px 0;position:relative;
+}
+.msg-body pre code{
+  background:none;border:none;padding:0;color:var(--text);font-size:12px;
+}
+.msg-body hr{border:none;border-top:1px solid var(--border);margin:10px 0}
+.msg-body table{border-collapse:collapse;margin:8px 0;font-size:12px;width:100%}
+.msg-body th,.msg-body td{border:1px solid var(--border);padding:5px 9px;text-align:left}
+.msg-body th{background:var(--panel2);color:var(--accent3);font-weight:600}
+
+/* Empty state */
+#chat-empty{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  flex:1;text-align:center;padding:40px 20px;gap:16px;
+}
+#chat-empty .logo-big{
+  font-size:48px;opacity:.4;
+  background:linear-gradient(135deg,var(--accent3),var(--accent2));
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+}
+#chat-empty h2{font-size:18px;font-weight:600;color:var(--text);letter-spacing:1px}
+#chat-empty p{font-size:13px;color:var(--dim);max-width:380px;line-height:1.6}
+#chat-empty .suggestions{display:flex;flex-direction:column;gap:8px;margin-top:8px;width:100%;max-width:360px}
+.suggestion-btn{
+  background:var(--panel2);border:1px solid var(--border2);color:var(--dim);
+  border-radius:10px;padding:10px 14px;cursor:pointer;font-family:var(--sans);
+  font-size:12.5px;text-align:left;transition:all .15s;
+}
+.suggestion-btn:hover{border-color:var(--accent);color:var(--text);box-shadow:var(--glow)}
+
+/* Scroll-to-bottom button */
+#scroll-bottom{
+  position:absolute;bottom:80px;right:24px;width:36px;height:36px;
+  border-radius:50%;background:var(--panel2);border:1px solid var(--border2);
+  color:var(--accent);cursor:pointer;font-size:16px;display:none;
+  align-items:center;justify-content:center;z-index:20;transition:all .15s;
+  box-shadow:0 4px 20px rgba(0,0,0,.4);
+}
+#scroll-bottom:hover{border-color:var(--accent);box-shadow:var(--glow)}
+#scroll-bottom.show{display:flex}
+
+/* Chat status + input */
+#chat-status.working{color:var(--accent)}
+#chat-status.working::before{content:'';display:inline-block;width:6px;height:6px;margin-right:6px;border-radius:50%;background:var(--accent);animation:pulse 1s infinite}
+#chat-input-row{display:flex;gap:8px;padding:12px;border-top:1px solid var(--border);align-items:flex-end;position:relative}
+#chat-mode-row{display:flex;gap:8px;align-items:center;padding:8px 14px;border-bottom:1px solid var(--border);background:var(--bg2)}
+#chat-mode-row label{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:1px}
+#chat-status{margin-left:auto;font-size:10px;color:var(--dim);font-family:var(--mono)}
+#chat-status.live{color:var(--green)}
+#chat-status.live.working{color:var(--accent)}
+#chat-input{flex:1;background:var(--bg);border:1px solid var(--border2);color:var(--text);
+  border-radius:10px;padding:10px 14px;font-family:var(--mono);font-size:13.5px;outline:none;resize:none;
+  min-height:40px;max-height:120px;line-height:1.5}
+#chat-input:focus{border-color:var(--accent);box-shadow:var(--glow)}
+#chat-input::placeholder{color:var(--dimmer)}
+.chat-tool{background:transparent;border:1px solid var(--border2);color:var(--dim);border-radius:8px;padding:6px 10px;cursor:pointer;font:600 11px var(--sans)}
+.chat-tool:hover{color:var(--accent);border-color:var(--accent)}
+#stop-btn{
+  background:linear-gradient(135deg,rgba(255,85,119,.15),rgba(255,85,119,.05));
+  border:1px solid rgba(255,85,119,.4);color:var(--red);border-radius:10px;
+  padding:10px 16px;font-family:var(--sans);font-size:12px;font-weight:600;
+  cursor:pointer;letter-spacing:1px;white-space:nowrap;min-height:40px;
+  display:none;transition:all .15s;
+}
+#stop-btn:hover{box-shadow:0 0 16px rgba(255,85,119,.2);border-color:var(--red)}
+#stop-btn.show{display:block}
+#slash-menu{position:absolute;left:12px;right:12px;bottom:74px;z-index:30;max-height:310px;overflow:auto;background:var(--panel2);border:1px solid var(--border2);border-radius:12px;padding:6px;box-shadow:0 18px 55px rgba(0,0,0,.5)}
+.slash-item{display:flex;gap:12px;padding:10px;border-radius:8px;cursor:pointer}.slash-item:hover,.slash-item.active{background:rgba(168,85,247,.1)}
+.slash-name{color:var(--accent);font:600 13px var(--mono);min-width:100px}.slash-desc{color:var(--dim);font-size:12px}
+.modal-shade{position:fixed;inset:0;z-index:100;background:rgba(5,3,10,.78);display:flex;align-items:center;justify-content:center;padding:18px;backdrop-filter:blur(8px)}
+.modal-card{width:min(620px,100%);max-height:86dvh;overflow:auto;background:var(--panel);border:1px solid var(--border2);border-radius:16px;box-shadow:0 24px 90px rgba(0,0,0,.65)}
+.modal-head{display:flex;align-items:center;padding:18px 20px;border-bottom:1px solid var(--border)}.modal-head h2{font-size:16px;flex:1}.modal-close{background:none;border:0;color:var(--dim);font-size:22px;cursor:pointer}
+.modal-body{padding:18px 20px;display:grid;gap:14px}.field{display:grid;gap:7px}.field label{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:1px}.field select{width:100%}
+.modal-actions{display:flex;justify-content:flex-end;gap:8px;padding:14px 20px;border-top:1px solid var(--border)}
+.btn{
+  background:linear-gradient(135deg,rgba(168,85,247,.15),rgba(124,58,237,.1));
+  border:1px solid var(--border2);color:var(--accent);border-radius:10px;
+  padding:10px 16px;font-family:var(--sans);font-size:12px;font-weight:600;
+  cursor:pointer;letter-spacing:1px;white-space:nowrap;min-height:40px;
+  transition:all .15s;
+}
+.btn:hover{box-shadow:var(--glow);border-color:var(--accent)}
+.btn:active{transform:scale(.97)}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+
+/* ===== Terminal ===== */
+#term-wrap{height:calc(100dvh - 92px - var(--safe-top) - var(--safe-bot));display:flex;flex-direction:column;
+  background:#040308;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+#xterm{flex:1;min-height:0;padding:8px}
+.xterm{height:100%}
+#term-out{flex:1;overflow-y:auto;padding:14px;font-size:12px;line-height:1.5;white-space:pre-wrap;font-family:var(--mono);-webkit-overflow-scrolling:touch}
+#term-out .cmd-line{color:var(--accent)}
+#term-in-row{display:flex;border-top:1px solid var(--border);align-items:center;padding:0 12px}
+#term-in-row .ps1{color:var(--accent2);padding-right:8px;font-family:var(--mono);font-size:12px}
+#term-in{flex:1;background:none;border:none;color:var(--green);padding:12px 0;
+  font-family:var(--mono);font-size:13px;outline:none;min-height:40px}
+
+/* ===== Files ===== */
+#files-wrap{display:flex;gap:14px;height:calc(100dvh - 92px - var(--safe-top) - var(--safe-bot))}
+#file-tree{width:280px;min-width:280px;background:var(--panel);border:1px solid var(--border);
+  border-radius:var(--radius);overflow-y:auto;padding:10px;-webkit-overflow-scrolling:touch}
+.fitem{padding:6px 10px;cursor:pointer;border-radius:6px;font-size:12px;color:var(--dim);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:var(--mono)}
+.fitem:hover{background:var(--panel2);color:var(--text)}
+.fitem.dir{color:var(--accent3)}
+#file-editor{flex:1;display:flex;flex-direction:column;background:var(--panel);
+  border:1px solid var(--border);border-radius:var(--radius);min-width:0;overflow:hidden}
+#file-path-bar{padding:10px 14px;border-bottom:1px solid var(--border);font-size:11.5px;
+  color:var(--dim);display:flex;gap:10px;align-items:center;font-family:var(--mono)}
+#file-content{flex:1;background:#040308;color:var(--text);border:none;outline:none;
+  padding:14px;font-family:var(--mono);font-size:12px;line-height:1.5;resize:none;-webkit-overflow-scrolling:touch}
+
+/* ===== Memory ===== */
+.mem-entry{padding:10px 12px;background:var(--panel);border:1px solid var(--border);
+  border-radius:10px;margin-bottom:8px;font-size:12px}
+.mem-entry .fh{color:var(--accent3);font-size:10.5px;margin-bottom:3px;font-family:var(--mono)}
+.fmtbytes{color:var(--dimmer);font-size:10px;font-family:var(--mono)}
+
+/* ===== Email ===== */
+#v-mail .card{max-width:560px}
+label.fl{display:block;font-size:10.5px;color:var(--dim);margin:14px 0 5px;letter-spacing:1px;font-weight:600}
+input.fw{width:100%}
+#mail-result{margin-top:14px;font-size:12px;padding:10px;border-radius:8px;display:none}
+#mail-result.ok{display:block;background:rgba(0,232,143,.08);border:1px solid rgba(0,232,143,.3);color:var(--green)}
+#mail-result.err{display:block;background:rgba(255,85,119,.08);border:1px solid rgba(255,85,119,.3);color:var(--red)}
+
+/* ===== Overlay (mobile drawer) ===== */
+#overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:99;opacity:0;transition:opacity .25s}
+#overlay.show{display:block;opacity:1}
+
+/* ===== Responsive ===== */
+@media(max-width:768px){
+  #side{
+    position:fixed;left:0;top:0;bottom:0;
+    transform:translateX(-100%);
+    box-shadow:4px 0 30px rgba(0,0,0,.5);
+  }
+  #side.open{transform:translateX(0)}
+  #menu-btn{display:block}
+  #topbar .crumb{display:none}
+  #views{padding:12px}
+  .grid{grid-template-columns:1fr;gap:10px}
+  #chat-wrap{flex-direction:column;height:calc(100dvh - 54px - var(--safe-top) - var(--safe-bot) - 24px)}
+  #chat-main{border-radius:10px}
+  #files-wrap{flex-direction:column;height:calc(100dvh - 54px - var(--safe-top) - var(--safe-bot) - 24px)}
+  #file-tree{width:100%;min-width:0;max-height:180px;flex-shrink:0}
+  #file-editor{flex:1}
+  .msg{max-width:92%}
+  #chat-input-row{padding:8px 10px}
+  #chat-input{font-size:13px;padding:8px 12px}
+  .btn{padding:8px 14px;font-size:11px}
+  #term-wrap{height:calc(100dvh - 54px - var(--safe-top) - var(--safe-bot) - 24px)}
+  #v-mail .card{max-width:100%}
+  #chat-empty .logo-big{font-size:36px}
+  #chat-empty h2{font-size:15px}
+}
+@media(max-width:420px){
+  #topbar{gap:8px;padding:0 12px}
+  #topbar h2{font-size:13px}
+  .badge{font-size:9px;padding:3px 8px}
+  #clock{font-size:10px}
+  #views{padding:10px}
+  .card{padding:14px}
+  .nav-item{padding:13px 14px;font-size:14px}
+}
+</style>
+<link rel="stylesheet" href="/static/vendor/xterm.css">
+<script src="/static/vendor/xterm.js"></script>
+</head>
+<body>
+<div id="overlay" onclick="closeNav()"></div>
+<div id="app">
+  <div id="side">
+    <div id="logo">
+      <h1>NORAX OS</h1>
+      <div class="sub"><span id="pulse"></span>AGENT CONTROL PLANE</div>
+    </div>
+    <div id="nav">
+      <div class="nav-item active" data-v="chat"><span class="ico">💬</span>Chat</div>
+      <div class="nav-item" data-v="dash"><span class="ico">◈</span>Dashboard</div>
+      <div class="nav-item" data-v="term"><span class="ico">▸</span>Terminal</div>
+      <div class="nav-item" data-v="files"><span class="ico">▤</span>Files</div>
+      <div class="nav-item" data-v="mem"><span class="ico">◉</span>Memory</div>
+      <div class="nav-item" data-v="mail"><span class="ico">✉</span>Email Backup</div>
+    </div>
+    <div class="foot">
+      <span id="ver">v0.12.0</span><br>
+      <span id="hostinfo"></span>
+    </div>
+  </div>
+  <div id="main">
+    <div id="topbar">
+      <button id="menu-btn" onclick="toggleNav()">☰</button>
+      <h2 id="vtitle">CHAT</h2>
+      <span class="crumb">/ norax / agent_os</span>
+      <span class="badge ok" id="health-badge">ONLINE</span>
+      <span id="clock"></span>
+    </div>
+    <div id="views">
+      <div class="view active" id="v-chat"></div>
+      <div class="view" id="v-dash"></div>
+      <div class="view" id="v-term"></div>
+      <div class="view" id="v-files"></div>
+      <div class="view" id="v-mem"></div>
+      <div class="view" id="v-mail"></div>
+    </div>
+  </div>
+</div>
+<script>
+const $ = s => document.querySelector(s);
+// Bootstrap: grab token from URL ?token= or cookie, store in cookie for WS/fetch auth
+(function(){
+  const urlTok = new URLSearchParams(location.search).get('token');
+  if (urlTok) { document.cookie = 'os_token=' + urlTok + ';path=/;max-age=86400;SameSite=Strict'; }
+})();
+const osToken = () => decodeURIComponent((document.cookie.match(/(?:^|; )os_token=([^;]+)/)||[])[1] || '');
+const api = async (path, opts={}) => {
+  const headers = {'Content-Type':'application/json', 'x-os-token':osToken(), ...(opts.headers||{})};
+  const r = await fetch(path, {...opts, headers});
+  if (!r.ok) throw new Error((await r.json().catch(()=>({}))).error || r.status);
+  return r.json();
+};
+const esc = s => s.replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+/* ===== Simple Markdown Renderer ===== */
+function renderMarkdown(text){
+  // Escape HTML first
+  let html = esc(text);
+  // Extract code blocks first (protect from further parsing)
+  const codeBlocks = [];
+  html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, (m, lang, code) => {
+    const i = codeBlocks.length;
+    codeBlocks.push(`<pre><code class="lang-${esc(lang)}">${esc(code.trim())}</code></pre>`);
+    return `\x00CB${i}\x00`;
+  });
+  // Extract inline code
+  const inlineCodes = [];
+  html = html.replace(/`([^`]+)`/g, (m, code) => {
+    const i = inlineCodes.length;
+    inlineCodes.push(`<code>${esc(code)}</code>`);
+    return `\x00IC${i}\x00`;
+  });
+  // Headers
+  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+  // Bold
+  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/__([^_]+)__/g, '<strong>$1</strong>');
+  // Italic
+  html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  // Strikethrough
+  html = html.replace(/~~([^~]+)~~/g, '<del>$1</del>');
+  // Links
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  // Blockquote
+  html = html.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
+  // Horizontal rule
+  html = html.replace(/^---$/gm, '<hr>');
+  // Unordered list
+  html = html.replace(/^[\-\*] (.+)$/gm, '<li>$1</li>');
+  html = html.replace(/(<li>[\s\S]*?<\/li>)(?!\s*<li>)/g, '<ul>$1</ul>');
+  // Ordered list
+  html = html.replace(/^\d+\. (.+)$/gm, '<oli>$1</oli>');
+  html = html.replace(/(<oli>[\s\S]*?<\/oli>)(?!\s*<oli>)/g, '<ol>$1</ol>');
+  // Tables (pipe syntax)
+  html = html.replace(/^\|(.+)\|\n\|([-:\s|]+)\|\n((?:\|.+\|\n?)+)/gm, (m, hdr, sep, rows) => {
+    const hCells = hdr.split('|').map(c=>`<th>${c.trim()}</th>`).join('');
+    const rCells = rows.trim().split('\n').map(r =>
+      '<tr>' + r.split('|').filter((_,i,a)=>i>0&&i<a.length-1).map(c=>`<td>${c.trim()}</td>`).join('') + '</tr>'
+    ).join('');
+    return `<table><thead><tr>${hCells}</tr></thead><tbody>${rCells}</tbody></table>`;
+  });
+  // Paragraphs (split on double newline)
+  html = html.split(/\n\n+/).map(block => {
+    if (block.match(/^<(h[1-3]|ul|ol|pre|blockquote|hr|table)/)) return block;
+    if (block.match(/^\x00CB\d+\x00$/)) return block;
+    return '<p>' + block.replace(/\n/g, '<br>') + '</p>';
+  }).join('\n');
+  // Restore code blocks
+  html = html.replace(/\x00CB(\d+)\x00/g, (m, i) => codeBlocks[parseInt(i)] || m);
+  // Restore inline code
+  html = html.replace(/\x00IC(\d+)\x00/g, (m, i) => inlineCodes[parseInt(i)] || m);
+  return html;
+}
+
+/* nav */
+function toggleNav(){ const s=$('#side'); s.classList.toggle('open'); $('#overlay').classList.toggle('show'); }
+function closeNav(){ $('#side').classList.remove('open'); $('#overlay').classList.remove('show'); }
+document.querySelectorAll('.nav-item').forEach(el => el.onclick = () => {
+  document.querySelectorAll('.nav-item').forEach(x=>x.classList.remove('active'));
+  document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));
+  el.classList.add('active');
+  const v = el.dataset.v;
+  $('#v-'+v).classList.add('active');
+  $('#vtitle').textContent = el.textContent.trim().toUpperCase();
+  closeNav();
+  loaders[v] && loaders[v]();
+});
+setInterval(()=>{ $('#clock').textContent = new Date().toLocaleTimeString(); }, 1000);
+</script>
+<script>
+/* ================= DASHBOARD ================= */
+let chart;
+async function loadDash(){
+  const [health, sys, svcs] = await Promise.all([
+    api('/api/health'), api('/api/system'), api('/api/services')]);
+  const allOk = Object.values(health).every(h=>h.ok);
+  const b = $('#health-badge');
+  b.textContent = allOk ? 'ONLINE' : 'DEGRADED';
+  b.className = 'badge ' + (allOk ? 'ok' : 'bad');
+
+  const gpuRows = sys.gpus.map((g,i)=>{
+    const pct = Math.round(100*g.mem_used/Math.max(1,g.mem_total));
+    return `<div class="stat-row"><span class="k">GPU${i} · ${esc(g.name)}</span>
+      <span class="v">${g.util}% · ${g.mem_used}/${g.mem_total} MiB</span></div>
+      <div class="bar"><i style="width:${pct}%"></i></div>`;}).join('');
+
+  const svcRows = Object.entries(svcs).map(([n,st])=>{
+    const ok = st==='active';
+    return `<div class="svc"><span class="dot ${ok?'g':'r'}"></span>
+      <span class="nm">${n}</span>
+      <button onclick="svcAct('${n}','restart')">↻</button>
+      <button onclick="svcAct('${n}','${ok?'stop':'start'}')">${ok?'■':'▶'}</button></div>`;}).join('');
+
+  const hRows = Object.entries(health).map(([n,h])=>
+    `<div class="stat-row"><span class="k"><span class="dot ${h.ok?'g':'r'}"></span>${n}</span>
+     <span class="v">${h.ok? h.ms+'ms' : (h.err||'HTTP '+h.code)}</span></div>`).join('');
+
+  $('#v-dash').innerHTML = `<div class="grid">
+    <div class="card"><h3>Runtime</h3>
+      <div class="stat-row"><span class="k">uptime</span><span class="v">${esc(sys.uptime)}</span></div>
+      <div class="stat-row"><span class="k">load</span><span class="v">${sys.load.join(' ')}</span></div>
+      <div class="stat-row"><span class="k">memory</span><span class="v">${sys.mem_used_mb}/${sys.mem_total_mb} MB</span></div>
+      <div class="stat-row"><span class="k">disk</span><span class="v">${sys.disk_avail} free (${sys.disk_pct})</span></div>
+    </div>
+    <div class="card"><h3>GPUs</h3>${gpuRows||'<span class="k">no nvidia-smi</span>'}</div>
+    <div class="card"><h3>Backend Health</h3>${hRows}</div>
+    <div class="card"><h3>Services</h3>${svcRows}</div>
+    <div class="card"><h3>Gateway Latency</h3><canvas id="lat"></canvas></div>
+  </div>`;
+
+  const labels = Object.keys(health);
+  const data = Object.values(health).map(h=>h.ms);
+  if (chart) chart.destroy();
+  chart = new Chart($('#lat'), {type:'bar',
+    data:{labels, datasets:[{data, backgroundColor:'rgba(168,85,247,.5)',
+      borderColor:'#a855f7', borderWidth:1, borderRadius:4}]},
+    options:{plugins:{legend:{display:false}}, scales:{
+      x:{ticks:{color:'#8b7fa8',font:{size:9}},grid:{display:false}},
+      y:{ticks:{color:'#8b7fa8',font:{size:9}},grid:{color:'#1e1830'}}},
+      maintainAspectRatio:false}});
+}
+async function svcAct(n,a){ await api(`/api/services/${n}/${a}`,{method:'POST'}); loadDash(); }
+
+/* ================= CHAT ================= */
+let noraxWs = null, sending = false, liveThread = 'agent-os-main', historyLoaded = false, historyTimer = null;
+const seenMessages = new Set();
+let userScrolledUp = false;
+
+/* Scroll discipline */
+function checkScrollUp(){
+  const log = $('#chat-log');
+  if (!log) return;
+  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
+  userScrolledUp = !atBottom;
+  const sb = $('#scroll-bottom');
+  if (sb) sb.classList.toggle('show', userScrolledUp);
+}
+function scrollToBottom(force){
+  const log = $('#chat-log');
+  if (!log) return;
+  if (force || !userScrolledUp){
+    log.scrollTop = log.scrollHeight;
+  }
+}
+function copyMessage(btn){
+  const body = btn.closest('.msg')?.querySelector('.msg-body');
+  if (!body) return;
+  const text = body.innerText;
+  navigator.clipboard.writeText(text).then(()=>{
+    btn.textContent = '✓ COPIED';
+    setTimeout(()=>{ btn.textContent = '⧉ COPY'; }, 1500);
+  });
+}
+
+async function syncChatHistory(){
+  try {
+    const m = document.cookie.match(/os_token=([^;]+)/);
+    const r = await fetch('/api/norax/history?_=' + Date.now(), {
+      cache:'no-store', headers:{'x-os-token': m ? m[1] : ''}
+    });
+    if (!r.ok) return;
+    const data = await r.json();
+    (data.messages || []).forEach(msg => addMsg(
+      msg.role === 'user' ? 'user' : 'assistant', msg.text || '', msg.timestamp
+    ));
+    historyLoaded = true;
+    setWorking(!!data.pending);
+    if (data.pending) workingBubble(); else finishWorking();
+  } catch (_) {}
+}
+function setWorking(active){
+  sending = active;
+  const st = $('#chat-status');
+  if (st){
+    st.textContent = active ? 'Norax is working…' : '● connected to runtime';
+    st.classList.toggle('working', active);
+    st.classList.add('live');
+  }
+  const btn = $('#chat-input-row .btn');
+  const stopBtn = $('#stop-btn');
+  if (btn){ btn.disabled = active; btn.textContent = active ? 'WORKING…' : 'SEND ▸'; }
+  if (stopBtn) stopBtn.classList.toggle('show', active);
+}
+function workingBubble(){
+  let bubble = $('#chat-log .thinking');
+  if (!bubble && $('#chat-log')){
+    bubble = document.createElement('div');
+    bubble.className = 'msg assistant thinking';
+    bubble.innerHTML = `<div class="msg-header"><div class="msg-avatar">N</div>
+      <div class="msg-meta"><span class="msg-who">NORAX</span></div></div>
+      <div class="msg-body"><span class="working-dots" aria-label="Norax is working"><i></i><i></i><i></i></span></div>`;
+    $('#chat-log').appendChild(bubble);
+    scrollToBottom(true);
+  }
+  return bubble;
+}
+function finishWorking(){
+  const ph = $('#chat-log .thinking');
+  if (ph) ph.remove();
+  setWorking(false);
+}
+function connectNorax(){
+  const proto = location.protocol==='https:'?'wss:':'ws:';
+  const osTok = document.cookie.match(/os_token=([^;]+)/);
+  const tokParam = osTok ? '?token=' + osTok[1] : '';
+  const wsUrl = `${proto}//${location.host}/ws/norax${tokParam}`;
+  noraxWs = new WebSocket(wsUrl);
+  noraxWs.onopen = async ()=>{
+    const s = $('#chat-status');
+    if (s){ s.textContent = '● connected to runtime'; s.classList.add('live'); }
+    await syncChatHistory();
+    clearInterval(historyTimer);
+    historyTimer = setInterval(syncChatHistory, 1500);
+  };
+  noraxWs.onclose = ()=>{
+    clearInterval(historyTimer);
+    const s = $('#chat-status');
+    if (s){ s.textContent = '○ disconnected — reconnecting…'; s.classList.remove('live'); }
+    setTimeout(connectNorax, 3000);
+  };
+  noraxWs.onerror = ()=>{ noraxWs.close(); };
+  noraxWs.onmessage = (ev)=>{
+    let j;
+    try { j = JSON.parse(ev.data); } catch { return; }
+    if (j.type === 'status'){
+      const active = j.status === 'typing' || j.status === 'working' || j.status === 'processing';
+      setWorking(active);
+      if (active) workingBubble(); else finishWorking();
+      return;
+    }
+    if (j.type === 'reply'){
+      finishWorking();
+      addMsg('assistant', j.text || j.content || '');
+    } else if (j.type === 'message' && j.source === 'discord'){
+      const role = j.role === 'assistant' ? 'assistant' : 'user';
+      const prefix = role === 'user' && j.sender ? j.sender + ': ' : '';
+      addMsg(role, prefix + (j.text || j.content || ''));
+    } else if (j.type === 'message'){
+      finishWorking();
+      addMsg('assistant', j.text || j.content || '');
+    } else if (j.type === 'error'){
+      const ph = $('#chat-log .thinking');
+      if (ph) ph.querySelector('.msg-body').innerHTML = `<span style="color:var(--red)">⚠ ${esc(j.error||j.text||'unknown')}</span>`;
+      setWorking(false);
+    }
+  };
+}
+
+function showEmptyState(){
+  const log = $('#chat-log');
+  if (!log || log.children.length > 0) return;
+  log.innerHTML = `<div id="chat-empty">
+    <div class="logo-big">🧠</div>
+    <h2>NORAX AGENT OS</h2>
+    <p>Your fully-owned AI runtime. Ask anything, run commands, manage files, and control your agent — all from your machine.</p>
+    <div class="suggestions">
+      <button class="suggestion-btn" onclick="useSuggestion('What can you do?')">💡 What can you do?</button>
+      <button class="suggestion-btn" onclick="useSuggestion('/status')">📊 Show runtime status</button>
+      <button class="suggestion-btn" onclick="useSuggestion('/models')">◈ List available models</button>
+      <button class="suggestion-btn" onclick="useSuggestion('/help')">❓ Show help &amp; commands</button>
+    </div>
+  </div>`;
+}
+function useSuggestion(text){
+  const inp = $('#chat-input');
+  if (!inp) return;
+  inp.value = text;
+  inp.focus();
+  if (text.startsWith('/')) sendMsg();
+}
+
+async function loadChat(){
+  if ($('#chat-wrap')) {
+    if (sending) { setWorking(true); workingBubble(); }
+    return;
+  }
+  $('#v-chat').innerHTML = `<div id="chat-wrap" style="flex-direction:column">
+    <div id="chat-main" style="flex:1;position:relative">
+      <div id="chat-mode-row">
+        <span style="font-size:11px;color:var(--accent);letter-spacing:1px">⬢ NORAX RUNTIME — DIRECT</span>
+        <button class="chat-tool" onclick="openSettings()">⚙ SETTINGS</button>
+        <button class="chat-tool" onclick="openModel()">◈ MODEL</button>
+        <button class="chat-tool" onclick="openThink()">✦ THINK</button>
+        <span id="chat-status" style="margin-left:auto;font-size:10px;color:var(--dim)">○ connecting…</span>
+      </div>
+      <div id="chat-log"></div>
+      <button id="scroll-bottom" onclick="scrollToBottom(true);userScrolledUp=false;this.classList.remove('show')">↓</button>
+      <div id="chat-input-row">
+        <div id="slash-menu" hidden></div>
+        <textarea id="chat-input" rows="2" placeholder="Message Norax…  (Enter to send, Shift+Enter newline)"></textarea>
+        <button class="btn" onclick="sendMsg()">SEND ▸</button>
+        <button id="stop-btn" onclick="stopGeneration()">■ STOP</button>
+      </div>
+    </div>
+  </div>`;
+  const inp = $('#chat-input');
+  inp.addEventListener('keydown', e=>{
+    if (e.key==='Escape'){ closeSlashMenu(); return; }
+    if (e.key==='Enter' && !e.shiftKey){ e.preventDefault(); sendMsg(); }
+  });
+  // Auto-resize textarea and expose Discord-style slash command discovery.
+  inp.addEventListener('input', ()=>{
+    inp.style.height = 'auto';
+    inp.style.height = Math.min(inp.scrollHeight, 120) + 'px';
+    updateSlashMenu(inp.value);
+  });
+  // Scroll discipline
+  const log = $('#chat-log');
+  if (log) log.addEventListener('scroll', checkScrollUp);
+  ensureCommandCatalog();
+  if (!noraxWs || noraxWs.readyState >= 2) connectNorax();
+  // Show empty state after a brief delay (if no history loads)
+  setTimeout(()=>{ if ($('#chat-log') && !$('#chat-log').children.length) showEmptyState(); }, 1500);
+}
+
+function addMsg(role, text, timestamp){
+  const fingerprint = `${role}:${text}`;
+  if (seenMessages.has(fingerprint)) return;
+  seenMessages.add(fingerprint);
+  // Remove empty state if present
+  const empty = $('#chat-empty');
+  if (empty) empty.remove();
+  const d = document.createElement('div');
+  d.className = 'msg ' + (role==='user'?'user':'assistant');
+  const who = role==='user' ? 'YOU' : 'NORAX';
+  const avatar = role==='user' ? 'U' : 'N';
+  const time = timestamp ? new Date(timestamp).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+  const isAssistant = role !== 'user';
+  const bodyHtml = isAssistant ? renderMarkdown(text) : esc(text);
+  d.innerHTML = `<div class="msg-header">
+    <div class="msg-avatar">${avatar}</div>
+    <div class="msg-meta">
+      <span class="msg-who">${who}</span>
+      <span class="msg-time">${time}</span>
+    </div>
+  </div>
+  <div class="msg-body">${bodyHtml}</div>
+  ${isAssistant ? `<div class="msg-actions">
+    <button class="msg-act-btn" onclick="copyMessage(this)">⧉ COPY</button>
+  </div>` : ''}`;
+  $('#chat-log').appendChild(d);
+  scrollToBottom();
+  return d;
+}
+
+async function sendMsg(){
+  if (sending) return;
+  const inp = $('#chat-input'), text = inp.value.trim();
+  if (!text) return;
+  inp.value = '';
+  inp.style.height = 'auto';
+  setWorking(true);
+  addMsg('user', text);
+  const bubble = workingBubble();
+  try {
+    const osTok2 = document.cookie.match(/os_token=([^;]+)/);
+    const r = await fetch('/api/norax/send', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'x-os-token': osTok2 ? osTok2[1] : ''},
+      body: JSON.stringify({message: text, thread_id: liveThread})
+    });
+    if (!r.ok){
+      const err = await r.text();
+      if (bubble) bubble.querySelector('.msg-body').innerHTML = `<span style="color:var(--red)">⚠ ${esc(err)}</span>`;
+      setWorking(false);
+    }
+  } catch(e){
+    if (bubble) bubble.querySelector('.msg-body').innerHTML = `<span style="color:var(--red)">⚠ ${esc(e.message)}</span>`;
+    setWorking(false);
+  }
+}
+
+function stopGeneration(){
+  // Send stop command
+  const osTok2 = document.cookie.match(/os_token=([^;]+)/);
+  fetch('/api/norax/send', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'x-os-token': osTok2 ? osTok2[1] : ''},
+    body: JSON.stringify({message: '/stop', thread_id: liveThread})
+  }).catch(()=>{});
+  finishWorking();
+}
+
+/* ================= SLASH COMMANDS + DIALOGS ================= */
+let commandCatalog = null, slashIdx = -1, slashItems = [];
+
+async function ensureCommandCatalog(){
+  if (commandCatalog) return;
+  try {
+    commandCatalog = await api('/api/norax/commands');
+  } catch(e) {
+    commandCatalog = {commands:[], providers:[], thinking:[]};
+  }
+}
+
+function updateSlashMenu(val){
+  const menu = $('#slash-menu');
+  if (!menu) return;
+  if (!val.startsWith('/')){ menu.hidden = true; slashIdx = -1; return; }
+  const q = val.slice(1).toLowerCase();
+  ensureCommandCatalog().then(()=>{
+    const cmds = (commandCatalog.commands||[]).filter(c =>
+      c.name.startsWith(q) || q === '');
+    if (!cmds.length){ menu.hidden = true; return; }
+    slashItems = cmds;
+    slashIdx = 0;
+    menu.hidden = false;
+    menu.innerHTML = cmds.map((c,i)=>
+      `<div class="slash-item${i===0?' active':''}" onclick="execSlash('${c.name}')" data-idx="${i}">
+        <span class="slash-name">/${c.name}</span>
+        <span class="slash-desc">${esc(c.description||'')}</span>
+      </div>`).join('');
+  });
+}
+
+function closeSlashMenu(){
+  const menu = $('#slash-menu');
+  if (menu) menu.hidden = true;
+  slashIdx = -1;
+}
+
+function execSlash(name){
+  closeSlashMenu();
+  const inp = $('#chat-input');
+  inp.value = '/' + name + ' ';
+  inp.focus();
+  const noArg = ['status','help','models','new','stop','restart','settings'];
+  if (noArg.includes(name)){
+    sendMsg();
+  }
+}
+
+document.addEventListener('keydown', e=>{
+  const menu = $('#slash-menu');
+  if (!menu || menu.hidden) return;
+  if (e.key === 'ArrowDown'){
+    e.preventDefault();
+    slashIdx = Math.min(slashIdx + 1, slashItems.length - 1);
+    menu.querySelectorAll('.slash-item').forEach((el,i)=>
+      el.classList.toggle('active', i === slashIdx));
+  } else if (e.key === 'ArrowUp'){
+    e.preventDefault();
+    slashIdx = Math.max(slashIdx - 1, 0);
+    menu.querySelectorAll('.slash-item').forEach((el,i)=>
+      el.classList.toggle('active', i === slashIdx));
+  } else if (e.key === 'Tab' && slashItems.length){
+    e.preventDefault();
+    execSlash(slashItems[slashIdx].name);
+  } else if (e.key === 'Enter' && slashItems.length && $('#chat-input').value.startsWith('/')){
+    e.preventDefault();
+    execSlash(slashItems[slashIdx].name);
+  }
+});
+
+/* ---- Settings Dialog ---- */
+function openSettings(){
+  ensureCommandCatalog().then(()=>{
+    const cmds = commandCatalog.commands || [];
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-shade';
+    overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+    overlay.innerHTML = `<div class="modal-card">
+      <div class="modal-head"><h2>⚙ Settings</h2>
+        <button class="modal-close" onclick="this.closest('.modal-shade').remove()">×</button></div>
+      <div class="modal-body">
+        <div class="field"><label>Slash Commands</label>
+          <div style="max-height:200px;overflow:auto;display:grid;gap:4px">
+            ${cmds.map(c=>`<div style="display:flex;gap:10px;padding:6px 8px;border-radius:6px;background:var(--bg2)">
+              <span style="color:var(--accent);font:600 12px var(--mono);min-width:90px">/${c.name}</span>
+              <span style="color:var(--dim);font-size:12px">${esc(c.description||'')}</span></div>`).join('')}
+          </div>
+        </div>
+        <div class="field"><label>Quick Actions</label>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn" onclick="execSlash('status')">STATUS</button>
+            <button class="btn" onclick="execSlash('new')">NEW CHAT</button>
+            <button class="btn" onclick="execSlash('help')">HELP</button>
+            <button class="btn" onclick="execSlash('restart')">RESTART</button>
+          </div>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" onclick="this.closest('.modal-shade').remove()">CLOSE</button>
+      </div>
+    </div>`;
+    document.body.appendChild(overlay);
+  });
+}
+
+/* ---- Model Dialog ---- */
+function openModel(){
+  ensureCommandCatalog().then(()=>{
+    const providers = commandCatalog.providers || [];
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-shade';
+    overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+    overlay.innerHTML = `<div class="modal-card">
+      <div class="modal-head"><h2>◈ Model Selection</h2>
+        <button class="modal-close" onclick="this.closest('.modal-shade').remove()">×</button></div>
+      <div class="modal-body">
+        <div class="field"><label>Provider</label>
+          <select id="model-provider" onchange="updateModelList()">
+            ${providers.map(p=>`<option value="${esc(p.id)}">${esc(p.label)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field"><label>Model</label>
+          <select id="model-select"></select>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" onclick="this.closest('.modal-shade').remove()">CANCEL</button>
+        <button class="btn" onclick="applyModel()">APPLY ▸</button>
+      </div>
+    </div>`;
+    document.body.appendChild(overlay);
+    updateModelList();
+  });
+}
+
+function updateModelList(){
+  const provId = $('#model-provider')?.value;
+  if (!provId || !commandCatalog) return;
+  const prov = (commandCatalog.providers||[]).find(p=>p.id===provId);
+  if (!prov) return;
+  const sel = $('#model-select');
+  sel.innerHTML = prov.models.map(m=>
+    `<option value="${esc(m.id)}">${esc(m.label)}</option>`).join('');
+}
+
+function applyModel(){
+  const provId = $('#model-provider')?.value || '';
+  const modelId = $('#model-select')?.value || '';
+  const overlay = document.querySelector('.modal-shade');
+  if (overlay) overlay.remove();
+  const inp = $('#chat-input');
+  inp.value = `/model ${provId}/${modelId}`;
+  sendMsg();
+}
+
+/* ---- Think Dialog ---- */
+function openThink(){
+  ensureCommandCatalog().then(()=>{
+    const thinks = commandCatalog.thinking || [];
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-shade';
+    overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+    overlay.innerHTML = `<div class="modal-card">
+      <div class="modal-head"><h2>✦ Think — Reasoning Effort</h2>
+        <button class="modal-close" onclick="this.closest('.modal-shade').remove()">×</button></div>
+      <div class="modal-body">
+        <div class="field"><label>Effort Level</label>
+          <select id="think-select">
+            ${thinks.map(t=>`<option value="${esc(t.id)}">${esc(t.label)}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" onclick="this.closest('.modal-shade').remove()">CANCEL</button>
+        <button class="btn" onclick="applyThink()">APPLY ▸</button>
+      </div>
+    </div>`;
+    document.body.appendChild(overlay);
+  });
+}
+
+function applyThink(){
+  const level = $('#think-select')?.value || '';
+  const overlay = document.querySelector('.modal-shade');
+  if (overlay) overlay.remove();
+  const inp = $('#chat-input');
+  inp.value = `/think ${level}`;
+  sendMsg();
+}
+</script>
+<script>
+/* ================= TERMINAL ================= */
+let termHist = [], termIdx = 0;
+let term, termWs, termResize;
+function loadTerm(){
+  $('#v-term').innerHTML = `<div id="term-wrap"><div id="xterm"></div></div>`;
+  if (termWs) termWs.close();
+  term = new Terminal({cursorBlink:true, convertEol:false, scrollback:10000,
+    fontFamily:'JetBrains Mono, Fira Code, monospace', fontSize:13,
+    theme:{background:'#040308',foreground:'#c8d3e0',cursor:'#c084fc'}});
+  term.open($('#xterm'));
+  const fit = () => {
+    const el=$('#xterm'), cols=Math.max(20,Math.floor(el.clientWidth/8)), rows=Math.max(5,Math.floor(el.clientHeight/17));
+    term.resize(cols,rows);
+    if(termWs?.readyState===1) termWs.send(JSON.stringify({type:'resize',cols,rows}));
+  };
+  const proto=location.protocol==='https:'?'wss:':'ws:';
+  termWs=new WebSocket(`${proto}//${location.host}/ws/terminal?token=${encodeURIComponent(osToken())}`);
+  termWs.binaryType='arraybuffer';
+  termWs.onopen=()=>{ fit(); term.focus(); };
+  termWs.onmessage=e=>term.write(e.data instanceof ArrayBuffer ? new Uint8Array(e.data) : e.data);
+  termWs.onclose=()=>term.write('\r\n\x1b[31m[terminal disconnected]\x1b[0m\r\n');
+  term.onData(data=>{ if(termWs.readyState===1) termWs.send(JSON.stringify({type:'input',data})); });
+  clearInterval(termResize); termResize=setInterval(fit,500);
+}
+
+/* ================= FILES ================= */
+let curFile = null;
+function loadFiles(){
+  $('#v-files').innerHTML = `<div id="files-wrap">
+    <div id="file-tree"></div>
+    <div id="file-editor">
+      <div id="file-path-bar"><span id="fp" style="flex:1">select a file</span>
+        <button class="btn" style="padding:6px 14px" onclick="saveFile()">SAVE</button></div>
+      <textarea id="file-content" spellcheck="false" placeholder="// file contents"></textarea>
+    </div></div>`;
+  browse('.');
+}
+async function browse(path){
+  const r = await api('/api/files?path='+encodeURIComponent(path));
+  const tree = $('#file-tree');
+  const parent = r.path==='/'?'':`<div class="fitem dir" onclick="browse('${esc(r.path.split('/').slice(0,-1).join('/')||'/')}')">..</div>`;
+  tree.innerHTML = `<div style="color:var(--dimmer);font-size:10px;padding:4px 8px 8px">${esc(r.path)}</div>` + parent +
+    r.items.map(i=>`<div class="fitem ${i.dir?'dir':''}"
+      onclick="${i.dir?`browse('${esc(r.path+'/'+i.name)}')`:`openFile('${esc(r.path+'/'+i.name)}')`}">
+      ${i.dir?'▸':'·'} ${esc(i.name)}</div>`).join('');
+}
+async function openFile(path){
+  try{
+    const r = await api('/api/file?path='+encodeURIComponent(path));
+    curFile = path;
+    $('#fp').textContent = path;
+    $('#file-content').value = r.content;
+  }catch(e){ $('#fp').textContent = '⚠ '+e.message; }
+}
+async function saveFile(){
+  if (!curFile) return;
+  await api('/api/file',{method:'POST',
+    body:JSON.stringify({path:curFile, content:$('#file-content').value})});
+  $('#fp').textContent = curFile + '  ✓ saved';
+}
+
+/* ================= MEMORY ================= */
+async function loadMem(){
+  const r = await api('/api/memory');
+  $('#v-mem').innerHTML = `<div class="grid" style="grid-template-columns:1fr 1fr">
+    <div class="card"><h3>Memory Store — ${esc(r.root)}</h3>
+      ${r.items.map(i=>`<div class="stat-row">
+        <span class="k">${i.dir?'▸':'·'} ${esc(i.name)}</span>
+        <span class="v fmtbytes">${i.dir?'dir':(i.size/1024).toFixed(1)+' KB'}</span></div>`).join('')}
+    </div>
+    <div class="card"><h3>Search semantic.md / scratchpad</h3>
+      <div style="display:flex;gap:8px;margin-bottom:12px">
+        <input type=text id="mem-q" class="fw" placeholder="query…" style="flex:1">
+        <button class="btn" onclick="memSearch()">SEARCH</button></div>
+      <div id="mem-hits"></div></div></div>`;
+  $('#mem-q').addEventListener('keydown', e=>{ if(e.key==='Enter') memSearch(); });
+}
+async function memSearch(){
+  const q = $('#mem-q').value.trim(); if(!q) return;
+  const r = await api('/api/memory/search',{method:'POST',body:JSON.stringify({q})});
+  $('#mem-hits').innerHTML = r.hits.length
+    ? r.hits.map(h=>`<div class="mem-entry"><div class="fh">${h.file}:${h.line}</div>${esc(h.text)}</div>`).join('')
+    : '<span style="color:var(--dimmer)">no hits</span>';
+}
+
+/* ================= EMAIL ================= */
+function loadMail(){
+  $('#v-mail').innerHTML = `<div class="card"><h3>Email Backup Channel — Gmail SMTP</h3>
+    <p style="color:var(--dim);font-size:12px;line-height:1.6">
+      Backup alert channel for Norax. Uses SMTP_SSL (Gmail or compatible).
+      Set <b>NORAX_SMTP_USER</b> and <b>NORAX_SMTP_PASS</b> in the service
+      environment for persistent use, or paste them here for a one-off test.</p>
+    <label class="fl">SMTP USER / RECIPIENT</label>
+    <input type=text id="mail-to" class="fw" placeholder="your-email@gmail.com">
+    <label class="fl">APP PASSWORD (optional if env set)</label>
+    <input type=password id="mail-pass" class="fw" placeholder="16-char Gmail app password">
+    <div style="margin-top:16px"><button class="btn" onclick="mailTest()">SEND TEST ALERT ▸</button></div>
+    <div id="mail-result"></div></div>`;
+}
+async function mailTest(){
+  const res = $('#mail-result'); res.className=''; res.style.display='none';
+  try{
+    const r = await api('/api/email/test',{method:'POST',
+      body:JSON.stringify({to:$('#mail-to').value, smtp_pass:$('#mail-pass').value})});
+    res.className='ok'; res.textContent = '✓ sent to '+r.to;
+  }catch(e){ res.className='err'; res.textContent = '✗ '+e.message; }
+}
+
+/* ================= boot ================= */
+const loaders = {dash:loadDash, chat:loadChat, term:loadTerm, files:loadFiles, mem:loadMem, mail:loadMail};
+loadChat();
+setInterval(()=>{ if($('#v-dash').classList.contains('active')) loadDash(); }, 15000);
+</script>
+</body>
+</html>

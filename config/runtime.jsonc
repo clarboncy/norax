@@ -1,0 +1,160 @@
+{
+  // Norax runtime config — JSONC (JSON + // comments + trailing commas).
+  // The agent edits this file directly. No manual tuning expected.
+
+  "runtime": {
+    "shutdown_grace_seconds": 10,
+    // Keep one runaway task from exhausting the shared per-minute model-call
+    // budget and silencing the owner's next prompt. Unfinished work checkpoints
+    // cleanly and can continue on the next turn.
+    "max_tool_rounds": 150,
+    // Bound parallel model/tool work and queued ingress so one burst cannot
+    // exhaust memory or block cancellation on unrelated channels.
+    "max_concurrent_turns": 8,
+    "max_pending_turns": 256,
+    "thinking_effort": "medium",
+    "reasoning_output": false,
+  },
+
+  "http": {
+    "bind": "127.0.0.1:4101",
+  },
+
+  // LLM gateway: multi-provider router. Each provider is an
+  // OpenAI-compatible endpoint. `routes` maps model-name globs to
+  // provider names (first match wins). Unmatched models go to
+  // `default_provider`. Provider `api_key` falls back to env vars.
+  //
+  // Add your own providers via the provider store API or
+  // ~/.config/norax/providers.json — see README "Provider setup".
+  "gateway": {
+    "default_model": "qwen3.8-27b-fast:latest",
+    "default_provider": "ollama_local",
+    // The selected model is authoritative. Provider/API failures are surfaced
+    // to the owner and never trigger an automatic cross-model takeover.
+    "failover_models": [],
+    "timeout_seconds": 600,
+    "providers": {
+      // Ollama cloud — cloud models only (http://127.0.0.1:11434).
+      "ollama": {
+        "provider_kind": "ollama",
+        "base_url": "http://127.0.0.1:11434/v1",
+        "chat_path": "/chat/completions",
+      },
+      // llama.cpp DFlash2 — local Qwen 3.8 27B inference (http://127.0.0.1:11435).
+      // Speculative decoding with draft on GPU0, target on GPU1.
+      // Uses OpenAI-compatible API (not Ollama native /api/chat).
+      "ollama_local": {
+        "provider_kind": "openai",
+        "base_url": "http://127.0.0.1:11435/v1",
+        "chat_path": "/chat/completions",
+      },
+      // Codex Direct — local Codex CLI OAuth proxy on :4146.
+      // Requires Codex CLI installed and authenticated (`codex auth login`).
+      // Routes gpt-5.5+ models through the local proxy with no API key needed.
+      "codex_direct": {
+        "provider_kind": "codex_direct",
+        "base_url": "http://127.0.0.1:4146/v1",
+        "chat_path": "/chat/completions",
+      },
+      // OpenRouter — OpenAI-compatible aggregator.
+      // api_key falls back to $NORAX_OPENROUTER_TOKEN.
+      "openrouter": {
+        "provider_kind": "openrouter",
+        "base_url": "https://openrouter.ai/api/v1",
+        "chat_path": "/chat/completions",
+        "extra_headers": {
+          "HTTP-Referer": "https://github.com/your-username/norax",
+          "X-Title": "NoraxAI"
+        },
+      },
+    },
+    "routes": [
+      // Codex Direct (gpt-5.5+ family via local OAuth proxy)
+      ["openai-codex/*",               "codex_direct"],
+      ["gpt-5.*",                      "codex_direct"],
+      ["gpt-5",                        "codex_direct"],
+      // OpenRouter (explicit prefix or bare model ids)
+      ["openrouter/*",                 "openrouter"],
+      ["anthropic/claude-*",           "openrouter"],
+      ["qwen/*",                       "openrouter"],
+      ["openai/*",                     "openrouter"],
+      ["google/*",                     "openrouter"],
+      // Ollama cloud/local tags
+      ["ollama/*",                     "ollama"],
+      ["ollama_local/*",               "ollama_local"],
+      ["*:cloud",                      "ollama"],
+      ["*:latest",                     "ollama_local"],
+      ["*:*",                          "ollama"],
+    ],
+  },
+
+  "channels": {
+    "discord": {
+      "enabled": false,
+      "token": null,
+      "allowBots": false,
+      "dmPolicy": "deny",
+      "groupPolicy": "deny",
+      "allowFrom": [],
+      "guilds": {},
+    },
+  },
+
+  // Experimental learning and diagnostic paths are opt-in. Core memory
+  // consolidation remains active; these switches additionally persist
+  // episodes, generate procedural guidance, or mine harness reports.
+  "cognition": {
+    "experimental_signals": false,
+    "idle_learning": false,
+    "harness_analysis": false,
+  },
+
+  // Cron-as-sensory: scheduled jobs fire SensoryInput envelopes into the
+  // same ingress bus the brain consumes. Out-of-process sleep-flush is
+  // run by `python -m norax.sleep` via systemd timer; do NOT schedule it
+  // here (would duplicate work).
+  "cron": {
+    "enabled": false,
+    "resolution_sec": 5.0,
+    "jobs": [
+      { "name": "daily-memory-consolidation", "schedule": { "at": "03:00" }, "kind": "self_maintenance" },
+      { "name": "daily-scratchpad-sync", "schedule": { "at": "03:30" }, "kind": "self_maintenance" },
+      { "name": "weekly-self-heal", "schedule": { "weekly": { "day": "sun", "at": "04:00" } }, "kind": "self_maintenance" },
+      { "name": "daily-skill-mining", "schedule": { "at": "04:30" }, "kind": "self_maintenance" },
+    ],
+  },
+
+  "owner": {
+    "id": null,
+    "label": "Owner",
+  },
+
+  "agent_os": {
+    "chat_token": null,
+  },
+
+  "paths": {
+    "soul":     "./soul/SOUL.md",
+    "identity": "./soul/IDENTITY.md",
+    "user":     "./soul/USER.md",
+    "memory_root": "~/.local/share/norax/memory",
+  },
+
+  // MCP: Model Context Protocol external tool servers. Tools are exposed
+  // to the agent loop with "mcp-" prefix (e.g. "mcp-filesystem.read_file").
+  "mcp": {
+    "enabled": false,
+    "servers": [
+      { "name": "filesystem", "transport": "stdio",
+        "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "."] },
+    ],
+  },
+
+  // Vision: when image attachments are present, switch the turn model to a
+  // vision-language model (VLM) so the agent can "see" pixels, not just OCR text.
+  "vision": {
+    "enabled": true,
+    "model": "openrouter/google/gemini-2.5-flash",
+  },
+}

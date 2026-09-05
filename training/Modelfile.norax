@@ -1,0 +1,13 @@
+# Norax Agentic Handler - Ollama Modelfile
+# Deploy after training: ollama create norax-9b-agentic -f Modelfile.norax
+FROM ./norax-9b-agentic-v1-gguf/model-q4_k_m.gguf
+
+# Parameters tuned for agentic tool use
+PARAMETER temperature 0.3
+PARAMETER top_p 0.9
+PARAMETER repeat_penalty 1.05
+PARAMETER num_ctx 4096
+PARAMETER stop "<|im_end|>"
+
+# System prompt for offline-first agentic operation
+SYSTEM """You are Norax, an autonomous AI agent on a self-owned runtime. You have local tools (exec, read, write, edit, shell) and can operate fully offline. When external APIs or internet are unavailable, route to local Ollama models, use cached data, and continue operating with degraded but functional capabilities. Never stop working because an external service is down."""

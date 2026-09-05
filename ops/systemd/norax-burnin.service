@@ -1,0 +1,13 @@
+# Default checkout: %h/norax. For another location, override WorkingDirectory
+# and ExecStart together in a systemd drop-in.
+[Unit]
+Description=Norax AI — collect release burn-in evidence
+After=norax-ai.service
+Wants=norax-ai.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/norax
+Environment=NORAX_STATE_DIR=%h/.local/state/norax
+ExecStart=%h/norax/.venv/bin/python %h/norax/scripts/burnin_monitor.py
+Nice=10

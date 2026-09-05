@@ -1,0 +1,13 @@
+[Unit]
+Description=Norax AI — sample release burn-in every minute
+
+[Timer]
+# Arm on every timer activation, including a mid-boot deployment, then sample
+# one minute after each completed collector run. This cannot overlap a slow
+# oneshot collector or remain permanently `elapsed` after a late enable.
+OnActiveSec=15s
+OnUnitInactiveSec=1min
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

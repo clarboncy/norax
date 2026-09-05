@@ -1,0 +1,21 @@
+# Default checkout: %h/norax. For another location, override WorkingDirectory
+# and ExecStart together in a systemd drop-in.
+[Unit]
+Description=Norax Remote Relay for Linux connector nodes
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/norax
+Environment=NORAX_REMOTE_HOST=0.0.0.0
+Environment=NORAX_REMOTE_PORT=8765
+Environment=NORAX_MEMORY_ROOT=%h/.local/share/norax/memory
+Environment=NORAX_REMOTE_ROOT=%h/.local/share/norax/memory/remote
+Environment=NORAX_REMOTE_CONTROL_TOKEN_FILE=%h/.local/share/norax/memory/remote/control.token
+ExecStart=%h/norax/.venv/bin/norax-remote-relay
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

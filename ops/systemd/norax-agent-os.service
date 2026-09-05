@@ -1,0 +1,22 @@
+# Default checkout: %h/norax. For another location, override WorkingDirectory,
+# EnvironmentFile, and ExecStart together in a systemd drop-in.
+[Unit]
+Description=Norax Agent OS — web dashboard + control plane
+After=network-online.target norax-ai.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/norax
+EnvironmentFile=%h/norax/.env
+Environment=HOME=%h
+Environment=NORAX_OS_BIND=127.0.0.1
+Environment=NORAX_OS_PORT=8822
+Environment=NORAX_AGENT_OS_STATE_DIR=%h/.local/state/norax/agent-os
+UMask=0077
+ExecStart=%h/norax/.venv/bin/python agent_os/server.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

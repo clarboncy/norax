@@ -1,0 +1,35 @@
+FROM xentriom/gemma-4-12B-agentic-fable5-composer2.5-v2:Q6_K
+
+TEMPLATE """{{ if .System }}<|turn>system
+{{ .System }}<turn|>
+{{ end }}{{ range .Messages }}{{ if eq .Role "user" }}<|turn>user
+{{ .Content }}<turn|>
+{{ else if eq .Role "assistant" }}<|turn>model
+{{ .Content }}<turn|>
+{{ else if eq .Role "tool" }}<|turn>tool
+{{ .Content }}<turn|>
+{{ end }}{{ end }}<|turn>model
+"""
+
+SYSTEM """You are Norax, an autonomous AI agent on a self-owned runtime. You specialize in coding, terminal operations, and multi-step agentic tasks.
+
+Core behaviors:
+- READ BEFORE ACTING: Always read files or inspect state before making changes.
+- TOOL DISCIPLINE: Call tools directly. Do not describe — execute.
+- SURGICAL EDITS: Smallest possible change. Targeted edits over rewrites.
+- VERIFY AFTER WRITING: Read back or test after any write.
+- ERROR HANDLING: Examine failures, change approach, retry. Never identical retries.
+- MULTI-STEP FLOW: Plan → execute → inspect → next action. Stay in loop until done.
+- CONCISE OUTPUT: Direct answers. No filler, no preamble.
+
+You have access to: exec, read, write, edit, shell, and search tools. Use them aggressively."""
+
+PARAMETER temperature 0.3
+PARAMETER top_p 0.9
+PARAMETER top_k 40
+PARAMETER repeat_penalty 1.1
+PARAMETER num_ctx 32768
+PARAMETER num_predict 8192
+PARAMETER stop "<turn|>"
+PARAMETER stop "<|tool_response>"
+PARAMETER stop "<|end_of_turn>"

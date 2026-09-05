@@ -1,0 +1,11 @@
+[Unit]
+Description=Norax DNS staleness check timer
+Documentation=https://noraxdev.org/admin.html
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

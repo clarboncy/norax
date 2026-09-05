@@ -1,0 +1,158 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.11.1"
+      - run: uv python install 3.12
+      - run: uv sync --frozen --all-extras
+      - name: Ruff check
+        run: uv run ruff check norax/ agent_os/ tools/ tests/ scripts/ benchmarks/ training/
+      - name: Ruff format check
+        run: uv run ruff format --check norax/ agent_os/ tools/ tests/ scripts/ benchmarks/ training/
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.11.1"
+      - run: uv python install 3.12
+      - run: uv sync --frozen --all-extras
+      - name: Lockfile consistency
+        run: uv lock --check
+      - name: Mypy
+        run: |
+          uv run mypy norax agent_os tools
+          uv run mypy scripts benchmarks training
+
+  compile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.11.1"
+      - run: uv python install 3.12
+      - run: uv sync --frozen --all-extras
+      - name: Bytecode compilation
+        run: uv run python -m compileall -q norax agent_os tools tests scripts benchmarks training
+      - name: Systemd unit validation
+        run: systemd-analyze --user verify ops/systemd/*.service ops/systemd/*.timer
+      - name: Shell helper syntax
+        run: bash -n setup.sh ops/systemd/*.sh scripts/*.sh tools/*.sh
+      - name: Publication and secret checks
+        run: |
+          uv run python scripts/publication_check.py
+          uv run python scripts/secret_scan.py
+      - name: Boundary import test
+        run: uv run pytest tests/boundary/ -q --tb=short
+
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.11.1"
+      - run: uv python install 3.12
+      - run: uv sync --frozen --all-extras
+      - name: Test suite with line, branch, and critical-path coverage
+        run: |
+          uv run pytest -q --tb=short -m "not host_integration and not subprocess_integration" --cov=norax --cov-branch --cov-report=json:coverage.json --cov-fail-under=64.5
+          uv run python scripts/coverage_guard.py coverage.json
+
+  integration-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.11.1"
+      - run: uv python install 3.12
+      - run: uv sync --frozen --all-extras
+      - name: Integration tests
+        run: uv run pytest tests/integration/ -q --tb=short -m "not host_integration"
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.11.1"
+      - run: uv python install 3.12
+      - run: uv sync --frozen --all-extras
+      - name: E2E stack verifier
+        run: uv run python scripts/verify_stack_e2e.py
+
+  build:
+    runs-on: ubuntu-latest
+    needs: [lint, typecheck, compile, unit-tests, integration-tests, e2e]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.11.1"
+      - run: uv python install 3.12
+      - run: uv sync --frozen --all-extras
+      - name: Build wheel
+        run: uv build
+      - name: Install into clean venv and smoke test
+        run: |
+          python -m venv /tmp/clean-venv
+          /tmp/clean-venv/bin/pip install dist/*.whl
+          cd /tmp
+          /tmp/clean-venv/bin/python - <<'PY'
+          import asyncio
+          from pathlib import Path
+          import norax
+          from norax.config.loader import load_config
+          from norax.dispatch.tools import t_computer_use
+
+          package = Path(norax.__file__).parent
+          assert (package / "defaults/runtime.jsonc").is_file()
+          assert (package / "defaults/soul").is_dir()
+          assert (package / "_tools/computer_use.py").is_file()
+          load_config()
+          assert asyncio.run(t_computer_use(action="info"))["ok"] is True
+          print(f"version={norax.__version__} package={package}")
+          PY
+          /tmp/clean-venv/bin/norax --help
+      - name: Production config validation
+        run: |
+          uv run python - <<'PY'
+          from pathlib import Path
+          from norax.config.loader import load_config
+          c = load_config()
+          for key, value in c.raw.get('paths', {}).items():
+              if key != 'memory_root':
+                  assert (Path('.') / value).exists(), f"Missing path: {key}={value}"
+          print("config validation OK")
+          PY
+
+  release-gate:
+    runs-on: ubuntu-latest
+    needs: [lint, typecheck, compile, unit-tests, integration-tests, e2e]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.11.1"
+      - run: uv python install 3.12
+      - run: uv sync --frozen --all-extras
+      - name: Locked dependency vulnerability audit
+        run: |
+          uv export --frozen --all-extras --no-hashes --output-file /tmp/norax-requirements.txt
+          uv run --all-extras pip-audit -r /tmp/norax-requirements.txt --progress-spinner off
