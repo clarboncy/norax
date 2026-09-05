@@ -13,6 +13,27 @@ external certification that every behavior is correct or that Norax
 outperforms another agent. Comparative superiority requires a matched,
 repeatable external evaluation rather than self-authored smoke tests.
 
+## Runtime modularization follow-up
+
+The post-audit runtime was decomposed by operational ownership without
+rewriting its behavior. `norax/runtime/core.py` now contains the stable
+composition, state initialization, construction, and ingress loop; turn
+execution, lifecycle, delivery, probes, sessions, model management, cognition,
+history, health classification, and validation live in focused modules.
+
+An AST comparison against the pre-refactor commit verified all 66 runtime
+methods and all 25 extracted helpers as structurally identical. The public
+`Runtime` surface remains inherited directly, with no delegating wrappers on
+the turn hot path. Boundary tests reject mixin method collisions and confirm
+the typing-only host contract cannot mask a missing runtime attribute.
+
+A fair no-bytecode-cache benchmark used fresh temporary source trees for both
+versions. Median import time changed from 0.420847 to 0.415256 seconds across
+12 alternating samples. Median cached dispatch time for 500,000 runtime method
+calls changed from 0.035229 to 0.034921 seconds across nine alternating
+samples. Both differences are within normal measurement noise and show no
+measurable performance regression.
+
 ## Complete source gate
 
 `scripts/quality_gate.py` verifies all of the following and exits nonzero on
@@ -32,13 +53,14 @@ any failure:
 
 Final measured test scope:
 
-- 1,679 tests in the coverage run;
+- 1,696 tests in the coverage run;
 - three subprocess-integration tests run separately and passed;
 - 10 `host_integration` tests intentionally excluded because they can mutate
   the operator's browser, clipboard, pointer, and keyboard session;
-- 73.60% statement coverage, 60.91% branch coverage, and 70.25% combined
+- 73.73% statement coverage, 60.91% branch coverage, and 70.35% combined
   coverage;
-- all 17 critical-module floors passed without lowering thresholds;
+- all 27 critical-module floors passed; every extracted production runtime
+  boundary now has an explicit line and branch floor;
 - 8,582 of 8,582 active event records verified with zero corruption after the
   final deployment activation;
 - active-memory lint passed;
@@ -48,10 +70,10 @@ The locked all-extras dependency export also passes `pip-audit` with no known
 vulnerabilities. The lock was upgraded from the vulnerable bundled `pip`
 release to 26.2.1. A fresh wheel build installed with dependencies into a clean
 virtual environment and loaded packaged defaults, soul data, configuration,
-and the packaged computer-use backend successfully. The final wheel contains
-183 members with no duplicate names, hidden package residue, unsafe archive
-paths, or symlinks. Its SHA-256 is
-`84d752e70f561315c0f11ecfb8e5ea9c2772a1a0131647dd3ef2fc3f452801c0`.
+and the packaged computer-use backend successfully. A post-refactor wheel
+smoke test also imported the composed runtime and verified every new runtime
+module was packaged. The wheel contains no duplicate names, hidden package
+residue, unsafe archive paths, or symlinks.
 
 ## Major correctness and integrity work
 

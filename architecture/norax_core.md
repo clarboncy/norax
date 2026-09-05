@@ -20,12 +20,20 @@
 │   ├── __init__.py
 │   ├── __main__.py            # `python -m norax` entrypoint
 │   │
-│   ├── runtime/               # the message loop
+│   ├── runtime/               # the message loop and its lifecycle boundaries
 │   │   ├── __init__.py
-│   │   ├── core.py            # Runtime class, main async loop
-│   │   ├── ingress_bus.py     # IngressBus: merges all sensory adapters
-│   │   ├── heartbeat.py       # the only time-based emitter we keep
-│   │   └── shutdown.py        # graceful drain on SIGTERM
+│   │   ├── core.py            # stable Runtime composition, construction, main loop
+│   │   ├── turn_pipeline.py   # one authenticated turn and post-turn persistence
+│   │   ├── lifecycle.py       # queues, task ownership, draining, shutdown
+│   │   ├── operations.py      # capability, transport, and completion probes
+│   │   ├── delivery.py        # outbound delivery and streaming cleanup
+│   │   ├── session.py         # rolling windows, cancellation, commands
+│   │   ├── model_management.py  # provider mutation and durable model settings
+│   │   ├── cognition.py       # stateful cognitive components and idle learning
+│   │   ├── history.py         # bounded history selection
+│   │   ├── health.py          # health-evidence classification
+│   │   ├── validation.py      # fail-closed runtime configuration primitives
+│   │   └── ingress_bus.py     # IngressBus: merges all sensory adapters
 │   │
 │   ├── envelope/              # The shared shape every adapter speaks
 │   │   ├── __init__.py
@@ -350,9 +358,11 @@ empty in Phase 1; Phase 2–7 fill them in.
 ```python
 # norax/runtime/core.py
 class Runtime:
-    def __init__(self, ingress, brain, dispatcher, gateway, prompt, memory, safety, log): ...
+    def __init__(self, *, ingress, events, cfg, gateway, **runtime_options): ...
+    @classmethod
+    def build(cls, cfg) -> "Runtime": ...
     async def run(self) -> None: ...
-    async def shutdown(self, sig=None) -> None: ...
+    async def shutdown(self) -> None: ...
 
 # norax/runtime/ingress_bus.py
 class IngressBus:
@@ -419,6 +429,15 @@ class Soul:
     def is_owner(self, principal: Principal) -> bool: ...
     def dangerous(self, command: str) -> bool: ...
 ```
+
+`Runtime` is the stable public composition root. Its behavior-only mixins are
+grouped by operational ownership rather than execution phase: lifecycle,
+operations, delivery, session, model management, cognition, and the turn
+pipeline. Methods are inherited directly—there are no delegating wrappers on
+the hot path. The shared typing base defines no runtime `__getattr__`, so a
+missing or misspelled state attribute still fails normally instead of being
+silently masked. Runtime implementation modules do not import `core`, which
+keeps the dependency direction acyclic.
 
 ---
 
@@ -910,9 +929,9 @@ r be
   every payload before any log write.
 - **Path containment**: read/write/edit tools reject paths
   outside `/path/to/norax` + configured external dirs.
-- **Task and process supervision**: runtime-owned tasks are observed by
-  `runtime/core.py`, readiness is reported through the capability registry,
-  and systemd owns process restart policy.
+- **Task and process supervision**: runtime-owned tasks are observed and
+  drained by `runtime/lifecycle.py`, readiness is reported through the
+  capability registry, and systemd owns process restart policy.
 - **Untrusted-content fencing**: assembler renders any
   `SensoryInput.trusted == False` body inside an
   `<<<EXTERNAL_UNTRUSTED_CONTENT>>>` envelope in the user-role

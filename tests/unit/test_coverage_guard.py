@@ -177,7 +177,23 @@ def test_guard_rejects_missing_file_data_and_non_object_root() -> None:
 
 def test_default_critical_policy_covers_runtime_and_external_protocol_boundaries() -> None:
     critical = coverage_guard.DEFAULT_CRITICAL_FLOORS
-    assert critical["norax/runtime/core.py"] == (44.5, 32.0)
+    runtime_boundaries = {
+        "norax/runtime/cognition.py",
+        "norax/runtime/core.py",
+        "norax/runtime/delivery.py",
+        "norax/runtime/health.py",
+        "norax/runtime/history.py",
+        "norax/runtime/lifecycle.py",
+        "norax/runtime/model_management.py",
+        "norax/runtime/operations.py",
+        "norax/runtime/session.py",
+        "norax/runtime/turn_pipeline.py",
+        "norax/runtime/validation.py",
+    }
+    assert runtime_boundaries <= critical.keys()
+    assert critical["norax/runtime/core.py"] == (70.0, 48.0)
+    assert critical["norax/runtime/turn_pipeline.py"] == (48.0, 34.0)
+    assert critical["norax/runtime/lifecycle.py"] == (70.0, 65.0)
     assert "norax/gateway_client/__init__.py" in critical
     assert "norax/mcp/server.py" in critical
     assert "norax/a2a/server.py" in critical
@@ -216,7 +232,7 @@ def test_cli_passes_a_valid_report_and_supports_legacy_option_aliases(
     output = capsys.readouterr().out
     assert "line >= 68.00%" in output
     assert "branch >= 55.00%" in output
-    assert "17 critical modules enforced" in output
+    assert f"{len(coverage_guard.DEFAULT_CRITICAL_FLOORS)} critical modules enforced" in output
 
 
 def test_cli_fails_closed_on_invalid_json_and_policy(

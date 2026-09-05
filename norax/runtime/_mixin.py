@@ -1,0 +1,162 @@
+"""Static typing support for behavior-only runtime mixins."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+
+class RuntimeAccessMixin:
+    """Declare host-owned names to mypy without changing runtime lookup.
+
+    These declarations are absent at runtime. They make misspelled state or
+    cross-boundary method names fail static analysis while keeping the mixins
+    independent from the concrete composition root.
+    """
+
+    if TYPE_CHECKING:
+        _a2a_uvicorn: Any
+        _active_inference: Any
+        _active_stream_messages: Any
+        _active_turn_tasks: Any
+        _active_typing_handles: Any
+        _analogy_engine: Any
+        _append_delivery_event: Any
+        _append_provider_event: Any
+        _autonomy_task: Any
+        _basal_ganglia: Any
+        _base_provider_names: Any
+        _best_of_n: Any
+        _build_runtime_handle: Any
+        _cache_break_times: Any
+        _cancel_channel: Any
+        _capability_probe_task: Any
+        _causal_graph: Any
+        _channel_id: Any
+        _completion_probe_age: Any
+        _completion_probe_defer_reason: Any
+        _connectors: Any
+        _context_injector: Any
+        _curiosity: Any
+        _custom_provider_usage: Any
+        _default_model_persist_task: Any
+        _deliver_turn_response: Any
+        _discover_custom_provider_models: Any
+        _domain_transfer: Any
+        _drain_active_turns: Any
+        _draining: Any
+        _dump_window: Any
+        _effective_model: Any
+        _effective_provider: Any
+        _emit_reply: Any
+        _ensure_cognitive_components: Any
+        _episodic: Any
+        _fast_ctx: Any
+        _gateway_has_provider: Any
+        _gateway_timeout_seconds: Any
+        _get_brain_stats: Any
+        _get_window: Any
+        _get_window_stats: Any
+        _graph_update_lock: Any
+        _handle_command: Any
+        _handle_turn: Any
+        _handle_turn_inner: Any
+        _harness_analysis_enabled: Any
+        _hebbian: Any
+        _hybrid: Any
+        _idle_learning_enabled: Any
+        _last_graph_save: Any
+        _last_probe_result: Any
+        _last_static_hash: Any
+        _last_tools_hash: Any
+        _last_turn_time: Any
+        _maintenance_tasks: Any
+        _max_pending_per_channel: Any
+        _max_pending_turns: Any
+        _memory_coordinator: Any
+        _memory_k_for_turn: Any
+        _memory_root: Any
+        _memory_store: Any
+        _metacognitive: Any
+        _mirror_discord_reply: Any
+        _multi_agent_enabled: Any
+        _multi_agent_max_concurrent: Any
+        _observe_service_task: Any
+        _optional_tasks: Any
+        _output_verifier: Any
+        _pending_default_model: Any
+        _persist_default_model: Any
+        _persist_default_model_async: Any
+        _persist_window: Any
+        _planner_enabled: Any
+        _probe_operational_tools: Any
+        _probe_task: Any
+        _provider_mutation_lock: Any
+        _provider_store: Any
+        _record_mcp_health: Any
+        _record_outbound_metric: Any
+        _release_current_turn_slot: Any
+        _reset_window: Any
+        _restore_custom_provider: Any
+        _rho_last_event_mtime_ns: Any
+        _rho_last_run: Any
+        _run_channel_turns: Any
+        _run_completion_probe: Any
+        _self_model: Any
+        _send_command_reply: Any
+        _settle_tasks: Any
+        _shutdown_complete: Any
+        _shutdown_lock: Any
+        _skill_learner: Any
+        _sleep_task: Any
+        _soul: Any
+        _started_mono: Any
+        _started_wall: Any
+        _stop_channels: Any
+        _temporal_graph: Any
+        _track_turn_task: Any
+        _turn_count: Any
+        _turn_queues: Any
+        _turn_semaphore: Any
+        _turn_slot_releasers: Any
+        _turn_work_count: Any
+        _user_model: Any
+        _vision_config: Any
+        _vta: Any
+        _warmup_task: Any
+        _window_path: Any
+        _windows: Any
+        a2a_server: Any
+        agent_os_bridge: Any
+        autonomy_config: Any
+        capabilities: Any
+        cfg: Any
+        custom_model_catalog: Any
+        default_model: Any
+        discord: Any
+        events: Any
+        failover_models: Any
+        gateway: Any
+        ingress: Any
+        max_tool_rounds: Any
+        mcp_client: Any
+        memory_depth: Any
+        metrics: Any
+        outbound: Any
+        planning_mode: Any
+        reasoning_output: Any
+        reminders: Any
+        response_length: Any
+        set_default_model: Any
+        set_max_tool_rounds: Any
+        set_memory_depth: Any
+        set_planning_mode: Any
+        set_reasoning_output: Any
+        set_response_length: Any
+        set_stream_replies: Any
+        set_thinking_effort: Any
+        set_tool_activity: Any
+        set_weak_model_boost: Any
+        stream_replies: Any
+        thinking_effort: Any
+        tool_activity: Any
+        weak_model_boost: Any
