@@ -20,10 +20,13 @@ SCAN_DIRS = {
     "config",
     "docs",
     "gateway_provider",
+    "layer2",
     "norax",
     "operations",
     "ops",
+    "patches",
     "references",
+    "research",
     "scripts",
     "soul",
     "tests",
@@ -32,10 +35,18 @@ SCAN_DIRS = {
 }
 SCAN_ROOT_FILES = {
     ".env.example",
+    ".gitignore",
+    ".gitignore.private",
+    ".python-version",
     "CONTRIBUTING.md",
+    "LICENSE",
     "pyproject.toml",
+    "pytest.ini",
     "README.md",
     "SECURITY.md",
+    "setup.sh",
+    "THIRD_PARTY_NOTICES.md",
+    "uv.lock",
 }
 SKIP_PARTS = {
     ".venv",

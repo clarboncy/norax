@@ -177,3 +177,37 @@ def test_publication_check_rejects_hidden_package_files(tmp_path, monkeypatch, c
 
     assert publication_check.main() == 1
     assert "hidden package file" in capsys.readouterr().out
+
+
+def test_publication_check_rejects_unapproved_top_level_tree(tmp_path, monkeypatch, capsys):
+    residue = tmp_path / "alternate-source/runtime.py"
+    residue.parent.mkdir(parents=True)
+    residue.write_text("print('not reviewed')", encoding="utf-8")
+    for required in publication_check.REQUIRED:
+        (tmp_path / required).write_text("placeholder", encoding="utf-8")
+    monkeypatch.setattr(publication_check, "ROOT", tmp_path)
+    monkeypatch.setattr(
+        publication_check,
+        "publication_files",
+        lambda: [residue.relative_to(tmp_path)],
+    )
+
+    assert publication_check.main() == 1
+    assert "unapproved top-level publication path" in capsys.readouterr().out
+
+
+def test_publication_check_rejects_unapproved_binary_archive(tmp_path, monkeypatch, capsys):
+    residue = tmp_path / "docs/source-export.zip"
+    residue.parent.mkdir(parents=True)
+    residue.write_bytes(b"PK\x03\x04not-a-reviewed-source-file")
+    for required in publication_check.REQUIRED:
+        (tmp_path / required).write_text("placeholder", encoding="utf-8")
+    monkeypatch.setattr(publication_check, "ROOT", tmp_path)
+    monkeypatch.setattr(
+        publication_check,
+        "publication_files",
+        lambda: [residue.relative_to(tmp_path)],
+    )
+
+    assert publication_check.main() == 1
+    assert "unapproved non-text publication file" in capsys.readouterr().out

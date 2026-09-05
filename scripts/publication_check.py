@@ -15,16 +15,60 @@ TEXT_SUFFIXES = {
     ".ini",
     ".js",
     ".json",
+    ".jsonl",
     ".jsonc",
     ".md",
     ".py",
     ".service",
     ".sh",
     ".toml",
+    ".ts",
     ".tsv",
+    ".timer",
     ".txt",
     ".yaml",
     ".yml",
+}
+ALLOWED_TOP_LEVEL = {
+    ".env.example",
+    ".github",
+    ".gitignore",
+    ".gitignore.private",
+    ".python-version",
+    "CONTRIBUTING.md",
+    "LICENSE",
+    "README.md",
+    "SECURITY.md",
+    "THIRD_PARTY_NOTICES.md",
+    "agent_os",
+    "architecture",
+    "benchmarks",
+    "config",
+    "docs",
+    "layer2",
+    "norax",
+    "ops",
+    "patches",
+    "pyproject.toml",
+    "pytest.ini",
+    "references",
+    "research",
+    "scripts",
+    "setup.sh",
+    "soul",
+    "tests",
+    "tools",
+    "training",
+    "uv.lock",
+}
+ALLOWED_TEXT_FILENAMES = {
+    ".gitignore",
+    ".gitignore.private",
+    ".python-version",
+    "LICENSE",
+    "Modelfile.norax",
+    "Modelfile.norax-gemma4-v2",
+    "uv.lock",
 }
 FORBIDDEN_TEXT = {
     "legacy-host-name": re.compile(r"openclaw|\.openclaw|clawdbot|moltbot", re.I),
@@ -73,6 +117,9 @@ def main() -> int:
             errors.append(f"missing required publication file: {required}")
     for rel in files:
         rel_text = rel.as_posix()
+        if not rel.parts or rel.parts[0] not in ALLOWED_TOP_LEVEL:
+            errors.append(f"unapproved top-level publication path: {rel_text}")
+            continue
         if rel_text == "scripts/publication_check.py":
             continue
         if rel_text in FORBIDDEN_ROOT_FILES or rel_text.startswith(FORBIDDEN_PREFIXES):
@@ -87,7 +134,12 @@ def main() -> int:
         if rel_text.endswith(FORBIDDEN_SUFFIXES):
             errors.append(f"private/generated file included: {rel_text}")
             continue
-        if rel.suffix.lower() not in TEXT_SUFFIXES and rel.name not in REQUIRED:
+        if (
+            rel.suffix.lower() not in TEXT_SUFFIXES
+            and rel.name not in REQUIRED
+            and rel.name not in ALLOWED_TEXT_FILENAMES
+        ):
+            errors.append(f"unapproved non-text publication file: {rel_text}")
             continue
         try:
             text = (ROOT / rel).read_text(encoding="utf-8", errors="replace")
