@@ -94,7 +94,7 @@ def main() -> int:
             "--cov-branch",
             "--cov-report=term",
             "--cov-report=json:coverage.json",
-            "--cov-fail-under=64.5",
+            "--cov-fail-under=74.0",
             "-m",
             "not host_integration and not subprocess_integration",
         ],

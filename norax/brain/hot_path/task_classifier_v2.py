@@ -86,7 +86,7 @@ _OPS_RE = re.compile(
     re.I,
 )
 _DEBUG_RE = re.compile(
-    r"\b(debug|investigate|trace|why|broken|crash|failing|failure|error|exception|timeout|permission denied|rate limited)\b",
+    r"\b(debug|investigate|trace|broken|crash|failing|failure|error|exception|timeout|permission denied|rate limited)\b",
     re.I,
 )
 _MEMORY_RE = re.compile(
@@ -98,7 +98,7 @@ _PLANNING_RE = re.compile(
     re.I,
 )
 
-_SIMPLE_FACT_RE = re.compile(r"^(what|who|when|where|which|is|are|can|do|does|did)\b", re.I)
+_SIMPLE_FACT_RE = re.compile(r"^(what|who|when|where|which|why|how|is|are|can|do|does|did)\b", re.I)
 
 
 def _regex_classify(message: str) -> TaskClassification:

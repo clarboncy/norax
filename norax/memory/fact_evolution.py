@@ -25,7 +25,11 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from ..atomic import append_bounded_text, read_bounded_text
+
 log = logging.getLogger("norax.memory.fact_evolution")
+
+_MAX_FACT_LOG_BYTES = 32 * 1024 * 1024
 
 
 @dataclass
@@ -102,7 +106,12 @@ class FactEvolutionTracker:
         if not self.log_path.exists():
             return
         try:
-            for line in self.log_path.read_text(encoding="utf-8").splitlines():
+            payload = read_bounded_text(self.log_path, max_bytes=_MAX_FACT_LOG_BYTES)
+        except Exception as exc:
+            log.warning("fact_evolution.load failed: %s", exc)
+            return
+        for line_number, line in enumerate(payload.splitlines(), 1):
+            try:
                 line = line.strip()
                 if not line:
                     continue
@@ -119,11 +128,11 @@ class FactEvolutionTracker:
                 )
                 hist = self._histories.setdefault(fv.fact_id, FactHistory(fact_id=fv.fact_id))
                 hist.versions.append(fv)
-            # Sort versions by timestamp
-            for hist in self._histories.values():
-                hist.versions.sort(key=lambda v: v.timestamp)
-        except Exception as exc:
-            log.warning("fact_evolution.load failed: %s", exc)
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                log.warning("fact_evolution.load skipped line %d: %s", line_number, exc)
+        # Sort versions by timestamp after recovering every valid line.
+        for hist in self._histories.values():
+            hist.versions.sort(key=lambda version: version.timestamp)
 
     def record(
         self,
@@ -180,9 +189,12 @@ class FactEvolutionTracker:
 
         # Persist (append-only)
         try:
-            self.log_path.parent.mkdir(parents=True, exist_ok=True)
-            with self.log_path.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(fv.to_dict(), ensure_ascii=False) + "\n")
+            append_bounded_text(
+                self.log_path,
+                json.dumps(fv.to_dict(), ensure_ascii=False) + "\n",
+                max_bytes=_MAX_FACT_LOG_BYTES,
+                mode=0o600,
+            )
         except Exception as exc:
             log.warning("fact_evolution.persist failed: %s", exc)
 
@@ -215,7 +227,7 @@ class FactEvolutionTracker:
                     {
                         "fact_id": fact_id,
                         "versions": len(hist.versions),
-                        "values": list(set(v.value for v in hist.versions)),
+                        "values": sorted(set(v.value for v in hist.versions)),
                         "current": hist.current_value(),
                     }
                 )

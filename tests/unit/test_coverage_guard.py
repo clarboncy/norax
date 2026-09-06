@@ -60,12 +60,12 @@ def _without_critical(**kwargs: Any) -> list[str]:
 
 def test_guard_enforces_line_branch_and_combined_totals_independently() -> None:
     violations = _without_critical(
-        report=_report(67.99, 54.99, 64.49, {"norax/core.py": _file(100, 80, 80)})
+        report=_report(76.99, 64.99, 73.99, {"norax/core.py": _file(100, 80, 80)})
     )
     assert violations == [
-        "total line coverage 67.99% is below 68.00%",
-        "total branch coverage 54.99% is below 55.00%",
-        "total combined coverage 64.49% is below 64.50%",
+        "total line coverage 76.99% is below 77.00%",
+        "total branch coverage 64.99% is below 65.00%",
+        "total combined coverage 73.99% is below 74.00%",
     ]
 
 
@@ -178,6 +178,9 @@ def test_guard_rejects_missing_file_data_and_non_object_root() -> None:
 def test_default_critical_policy_covers_runtime_and_external_protocol_boundaries() -> None:
     critical = coverage_guard.DEFAULT_CRITICAL_FLOORS
     runtime_boundaries = {
+        "norax/runtime/backoff.py",
+        "norax/runtime/capability_registry.py",
+        "norax/runtime/circuit_breaker.py",
         "norax/runtime/cognition.py",
         "norax/runtime/core.py",
         "norax/runtime/delivery.py",
@@ -189,11 +192,17 @@ def test_default_critical_policy_covers_runtime_and_external_protocol_boundaries
         "norax/runtime/session.py",
         "norax/runtime/turn_pipeline.py",
         "norax/runtime/validation.py",
+        "norax/runtime/watchdog.py",
     }
     assert runtime_boundaries <= critical.keys()
     assert critical["norax/runtime/core.py"] == (70.0, 48.0)
+    assert critical["norax/runtime/capability_registry.py"] == (100.0, 100.0)
+    assert critical["norax/runtime/cognition.py"] == (100.0, 100.0)
     assert critical["norax/runtime/turn_pipeline.py"] == (48.0, 34.0)
     assert critical["norax/runtime/lifecycle.py"] == (74.0, 71.0)
+    assert critical["norax/runtime/operations.py"] == (100.0, 100.0)
+    assert critical["norax/runtime/health.py"] == (100.0, 100.0)
+    assert critical["norax/runtime/validation.py"] == (100.0, 100.0)
     assert critical["norax/observability/log.py"] == (80.0, 62.0)
     assert "norax/gateway_client/__init__.py" in critical
     assert "norax/mcp/server.py" in critical
@@ -205,6 +214,17 @@ def test_default_critical_policy_covers_runtime_and_external_protocol_boundaries
     assert critical["norax/memory/hebbian.py"] == (90.0, 79.0)
     assert critical["norax/memory/temporal_graph.py"] == (97.0, 92.0)
     assert critical["norax/memory/user_model.py"] == (95.0, 83.0)
+    newly_closed = {
+        "norax/brain/hot_path/semantic_router.py",
+        "norax/brain/hot_path/task_classifier_v2.py",
+        "norax/brain/prediction_network.py",
+        "norax/memory/consolidator.py",
+        "norax/memory/decay.py",
+        "norax/memory/fact_evolution.py",
+        "norax/memory/retrievers/vector_store.py",
+        "norax/memory/tool_experience.py",
+    }
+    assert all(critical[name] == (100.0, 100.0) for name in newly_closed)
 
 
 def test_cli_passes_a_valid_report_and_supports_legacy_option_aliases(
@@ -231,8 +251,8 @@ def test_cli_passes_a_valid_report_and_supports_legacy_option_aliases(
     )
     assert coverage_guard.main() == 0
     output = capsys.readouterr().out
-    assert "line >= 68.00%" in output
-    assert "branch >= 55.00%" in output
+    assert "line >= 77.00%" in output
+    assert "branch >= 65.00%" in output
     assert f"{len(coverage_guard.DEFAULT_CRITICAL_FLOORS)} critical modules enforced" in output
 
 

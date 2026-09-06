@@ -15,6 +15,7 @@ import logging
 import math
 import os
 import re
+import stat
 import threading
 import time
 from collections.abc import Iterable
@@ -22,11 +23,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ..atomic import append_bounded_text, read_bounded_text
+
 log = logging.getLogger("norax.memory.tool_experience")
 
 _TOKEN_RE = re.compile(r"[a-z0-9_./-]{2,}", re.IGNORECASE)
 _SAFE_CODE_RE = re.compile(r"[^a-z0-9_.:-]+")
 _MAX_EVENT_BYTES = 2_000_000
+_MAX_SEED_BYTES = 8 * 1024 * 1024
+_MAX_REPLAY_BYTES = 8 * 1024 * 1024
+_MAX_EVENT_FILE_BYTES = 256 * 1024 * 1024
+_MAX_EVIDENCE_COUNT = 1_000_000
 
 # Portable minimum when a deployment has not installed the curated dataset.
 _BUILTIN: tuple[dict[str, Any], ...] = (
@@ -123,6 +130,34 @@ def _arg_shape(args: Any) -> list[str]:
     return sorted(str(key)[:64] for key in args)[:24]
 
 
+def _bounded_strings(value: Any, *, max_items: int, max_chars: int) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(str(item).strip()[:max_chars] for item in value if str(item).strip())[:max_items]
+
+
+def _confidence(value: Any, *, default: float = 1.0) -> float:
+    if isinstance(value, bool):
+        return default
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(parsed):
+        return default
+    return max(0.0, min(1.0, parsed))
+
+
+def _evidence_count(value: Any) -> int:
+    if isinstance(value, bool):
+        return 1
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return 1
+    return max(1, min(_MAX_EVIDENCE_COUNT, parsed))
+
+
 @dataclass(frozen=True)
 class ToolLesson:
     lesson_id: str
@@ -141,20 +176,20 @@ class ToolLesson:
     def from_seed(cls, row: dict[str, Any]) -> ToolLesson | None:
         lesson_id = str(row.get("id", "")).strip()[:96]
         intent = str(row.get("intent", "")).strip()[:320]
-        procedure = tuple(str(x).strip()[:240] for x in row.get("procedure", []) if str(x).strip())
+        procedure = _bounded_strings(row.get("procedure", []), max_items=8, max_chars=240)
         if not lesson_id or not intent or not procedure:
             return None
         return cls(
             lesson_id=lesson_id,
             intent=intent,
-            tools=tuple(str(x).strip()[:64] for x in row.get("tools", []) if str(x).strip()),
-            triggers=tuple(str(x).strip()[:80] for x in row.get("triggers", []) if str(x).strip()),
-            procedure=procedure[:8],
-            avoid=tuple(str(x).strip()[:180] for x in row.get("avoid", []) if str(x).strip())[:6],
+            tools=_bounded_strings(row.get("tools", []), max_items=24, max_chars=64),
+            triggers=_bounded_strings(row.get("triggers", []), max_items=24, max_chars=80),
+            procedure=procedure,
+            avoid=_bounded_strings(row.get("avoid", []), max_items=6, max_chars=180),
             verification=str(row.get("verification", "")).strip()[:280],
-            phases=tuple(str(x).strip() for x in row.get("phases", ["pre"]))[:3],
-            confidence=max(0.0, min(1.0, float(row.get("confidence", 1.0)))),
-            evidence_count=max(1, int(row.get("evidence_count", 1))),
+            phases=_bounded_strings(row.get("phases", ["pre"]), max_items=3, max_chars=16),
+            confidence=_confidence(row.get("confidence", 1.0)),
+            evidence_count=_evidence_count(row.get("evidence_count", 1)),
         )
 
 
@@ -177,18 +212,43 @@ class ToolExperienceMemory:
 
     @staticmethod
     def _read_jsonl(path: Path, *, tail_bytes: int | None = None) -> list[dict[str, Any]]:
-        if not path.exists():
-            return []
+        if tail_bytes is not None and (
+            isinstance(tail_bytes, bool) or not isinstance(tail_bytes, int) or tail_bytes < 1
+        ):
+            raise ValueError("tail_bytes must be a positive integer")
+        descriptor = -1
         try:
-            with path.open("rb") as handle:
-                if tail_bytes and path.stat().st_size > tail_bytes:
-                    handle.seek(-tail_bytes, os.SEEK_END)
-                    handle.readline()  # discard a potentially partial first row
-                data = handle.read().decode("utf-8", errors="replace")
-        except OSError:
+            descriptor = os.open(
+                path,
+                os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+            )
+            file_stat = os.fstat(descriptor)
+            if not stat.S_ISREG(file_stat.st_mode):
+                raise ValueError(f"tool experience path is not a regular file: {path}")
+            limit = tail_bytes or _MAX_SEED_BYTES
+            if tail_bytes is None and file_stat.st_size > limit:
+                raise ValueError(f"tool experience seed exceeds {limit} bytes: {path}")
+            with os.fdopen(descriptor, "rb") as handle:
+                descriptor = -1
+                start = max(0, file_stat.st_size - limit) if tail_bytes else 0
+                if start:
+                    handle.seek(start - 1)
+                    preceding = handle.read(1)
+                    handle.seek(start)
+                    if preceding != b"\n":
+                        handle.readline(limit + 1)  # discard one partial first row
+                data = handle.read(limit + 1)
+            if len(data) > limit:
+                raise ValueError(f"tool experience input exceeds {limit} bytes: {path}")
+            decoded = data.decode("utf-8", errors="replace")
+        except (OSError, ValueError) as exc:
+            log.warning("tool_experience.read_jsonl ignored %s: %s", path, exc)
             return []
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
         rows: list[dict[str, Any]] = []
-        for line in data.splitlines():
+        for line in decoded.splitlines():
             try:
                 row = json.loads(line)
             except (TypeError, json.JSONDecodeError):
@@ -216,8 +276,11 @@ class ToolExperienceMemory:
         # Losses inform metrics, never positive in-context demonstrations.
         if not row.get("verified") or not row.get("sequence"):
             return None
-        sequence = tuple(str(x)[:64] for x in row.get("sequence", []) if str(x))[:20]
-        failures = row.get("failures") or []
+        sequence = _bounded_strings(row.get("sequence", []), max_items=20, max_chars=64)
+        if not sequence:
+            return None
+        failures_value = row.get("failures") or []
+        failures = failures_value if isinstance(failures_value, list) else []
         avoid = tuple(
             f"Do not repeat {str(item.get('tool', 'tool'))[:64]} after {str(item.get('error', 'error'))[:80]}"
             for item in failures
@@ -228,13 +291,13 @@ class ToolExperienceMemory:
             lesson_id=f"verified-trajectory-{sig}",
             intent="Reuse a similar locally verified tool sequence.",
             tools=tuple(dict.fromkeys(sequence)),
-            triggers=tuple(str(x)[:80] for x in row.get("task_terms", []) if str(x))[:24],
+            triggers=_bounded_strings(row.get("task_terms", []), max_items=24, max_chars=80),
             procedure=tuple(f"Call {name}" for name in sequence),
             avoid=avoid,
             verification="Finish with an observation that independently verifies the requested outcome.",
             phases=("pre", "recovery"),
             confidence=0.8,
-            evidence_count=max(1, int(row.get("evidence_count", 1))),
+            evidence_count=_evidence_count(row.get("evidence_count", 1)),
             learned=True,
         )
 
@@ -261,15 +324,25 @@ class ToolExperienceMemory:
                 if row.get("source") == "replay_avoid":
                     if signature not in avoid_grouped:
                         avoid_grouped[signature] = dict(row)
-                        avoid_grouped[signature]["evidence_count"] = 1
+                        avoid_grouped[signature]["evidence_count"] = _evidence_count(
+                            row.get("evidence_count", 1)
+                        )
                     else:
-                        avoid_grouped[signature]["evidence_count"] += 1
+                        avoid_grouped[signature]["evidence_count"] = min(
+                            _MAX_EVIDENCE_COUNT,
+                            avoid_grouped[signature]["evidence_count"]
+                            + _evidence_count(row.get("evidence_count", 1)),
+                        )
                 continue
             if signature not in grouped:
                 grouped[signature] = dict(row)
-                grouped[signature]["evidence_count"] = 1
+                grouped[signature]["evidence_count"] = _evidence_count(row.get("evidence_count", 1))
             else:
-                grouped[signature]["evidence_count"] += 1
+                grouped[signature]["evidence_count"] = min(
+                    _MAX_EVIDENCE_COUNT,
+                    grouped[signature]["evidence_count"]
+                    + _evidence_count(row.get("evidence_count", 1)),
+                )
         lessons = [self._event_to_lesson(row) for row in grouped.values()]
         lessons.extend(self._avoid_to_lesson(row) for row in avoid_grouped.values())
         self._learned_lessons = [lesson for lesson in lessons if lesson is not None]
@@ -285,16 +358,15 @@ class ToolExperienceMemory:
         call fails with a familiar error, the agent gets actionable
         guidance instead of starting from scratch.
         """
-        failures = row.get("failures") or []
+        failures_value = row.get("failures") or []
+        failures = failures_value if isinstance(failures_value, list) else []
         if not failures:
             return None
         fail = failures[0] if isinstance(failures[0], dict) else {}
         tool_name = str(fail.get("tool", "tool"))[:64]
         err_type = str(fail.get("error", "error"))[:80]
-        recover_with = row.get("recover_with") or []
-        recover_tools = tuple(str(t)[:64] for t in recover_with if str(t))[:4]
-        task_terms = row.get("task_terms") or []
-        triggers = tuple(str(x)[:80] for x in task_terms if str(x))[:24]
+        recover_tools = _bounded_strings(row.get("recover_with", []), max_items=4, max_chars=64)
+        triggers = _bounded_strings(row.get("task_terms", []), max_items=24, max_chars=80)
         # Include the error type as a trigger so retrieval matches on
         # the error string itself during recovery.
         triggers = (*triggers, err_type, tool_name)
@@ -311,7 +383,7 @@ class ToolExperienceMemory:
             verification="Confirm the recovery tool succeeded before proceeding.",
             phases=("recovery",),
             confidence=0.7,
-            evidence_count=max(1, int(row.get("evidence_count", 1))),
+            evidence_count=_evidence_count(row.get("evidence_count", 1)),
             learned=True,
         )
 
@@ -415,8 +487,8 @@ class ToolExperienceMemory:
 
         for pf in pattern_files[:1]:  # only most recent
             try:
-                text = pf.read_text(encoding="utf-8", errors="replace")
-            except OSError:
+                text = read_bounded_text(pf, max_bytes=_MAX_REPLAY_BYTES, errors="replace")
+            except (OSError, ValueError):
                 continue
             for line in text.splitlines():
                 line = line.strip()
@@ -432,7 +504,7 @@ class ToolExperienceMemory:
                 seq = meta.get("tool_seq", "")
                 if not seq or "→" not in seq:
                     continue
-                tools = tuple(t.strip() for t in seq.split("→") if t.strip())
+                tools = tuple(t.strip()[:64] for t in seq.split("→") if t.strip())[:20]
                 if not tools:
                     continue
                 count = int(meta.get("count", "1")) if meta.get("count", "").isdigit() else 1
@@ -441,8 +513,10 @@ class ToolExperienceMemory:
                     success_rate = float(sr_str) / 100.0
                 except ValueError:
                     success_rate = 0.0
+                if not math.isfinite(success_rate):
+                    success_rate = 0.0
                 context = meta.get("context", "")
-                seq_hash = meta.get("id", hashlib.sha256(seq.encode()).hexdigest()[:8])
+                seq_hash = meta.get("id", hashlib.sha256(seq.encode()).hexdigest()[:8])[:32]
                 row = {
                     "schema": "norax.tool_experience.v1",
                     "ts": int(time.time()),
@@ -459,8 +533,8 @@ class ToolExperienceMemory:
 
         for af in avoid_files[:1]:  # only most recent
             try:
-                text = af.read_text(encoding="utf-8", errors="replace")
-            except OSError:
+                text = read_bounded_text(af, max_bytes=_MAX_REPLAY_BYTES, errors="replace")
+            except (OSError, ValueError):
                 continue
             for line in text.splitlines():
                 line = line.strip()
@@ -474,8 +548,8 @@ class ToolExperienceMemory:
                     if "=" in p:
                         k, v = p.split("=", 1)
                         avoid_meta[k] = v
-                tool_name = avoid_meta["tool"]
-                err_type = avoid_meta.get("error", "tool_error")
+                tool_name = avoid_meta["tool"][:64]
+                err_type = avoid_meta.get("error", "tool_error")[:80]
                 count = (
                     int(avoid_meta.get("count", "1"))
                     if avoid_meta.get("count", "").isdigit()
@@ -512,21 +586,30 @@ class ToolExperienceMemory:
                     for event in self._read_jsonl(self.events_path)
                     if event.get("signature")
                 }
-                with self.events_path.open("a", encoding="utf-8") as handle:
-                    for row in rows:
-                        signature = str(row.get("signature", ""))
-                        if not signature or signature in existing_signatures:
-                            continue
-                        payload = json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n"
-                        handle.write(payload)
-                        existing_signatures.add(signature)
-                        appended += 1
-                    handle.flush()
-                    os.fsync(handle.fileno())
+                pending: list[dict[str, Any]] = []
+                for row in rows:
+                    signature = str(row.get("signature", ""))
+                    if not signature or signature in existing_signatures:
+                        continue
+                    pending.append(row)
+                    existing_signatures.add(signature)
+                if pending:
+                    payload = "".join(
+                        json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n"
+                        for row in pending
+                    )
+                    append_bounded_text(
+                        self.events_path,
+                        payload,
+                        max_bytes=_MAX_EVENT_FILE_BYTES,
+                        durable=True,
+                        mode=0o600,
+                    )
+                    appended = len(pending)
             if appended:
                 self._events_mtime_ns = -1  # force reload
                 log.info("tool_experience: ingested %d replay patterns", appended)
-        except OSError as e:
+        except (OSError, ValueError) as e:
             log.warning("tool_experience.ingest_replay_patterns: %r", e)
         return appended
 
@@ -538,6 +621,8 @@ class ToolExperienceMemory:
         failures: list[dict[str, str]] = []
         arg_shapes: dict[str, list[str]] = {}
         for entry in trace[:80]:
+            if not isinstance(entry, dict):
+                continue
             name = str(entry.get("name", "unknown"))[:64]
             sequence.append(name)
             shape = _arg_shape(entry.get("args"))
@@ -566,10 +651,14 @@ class ToolExperienceMemory:
         payload = json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n"
         try:
             self.events_path.parent.mkdir(parents=True, exist_ok=True)
-            with self._lock, self.events_path.open("a", encoding="utf-8") as handle:
-                handle.write(payload)
-                handle.flush()
+            with self._lock:
+                append_bounded_text(
+                    self.events_path,
+                    payload,
+                    max_bytes=_MAX_EVENT_FILE_BYTES,
+                    mode=0o600,
+                )
             self._events_mtime_ns = -1
             return True
-        except OSError:
+        except (OSError, ValueError):
             return False

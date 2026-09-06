@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import tempfile
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -72,7 +73,9 @@ class OperationalMixin(RuntimeAccessMixin):
             return await probe_browser_backend(timeout=15)
 
         async def computer() -> dict[str, Any]:
-            path = Path("/tmp/norax-startup-display-probe.png")
+            descriptor, filename = tempfile.mkstemp(prefix="norax-display-probe-", suffix=".png")
+            os.close(descriptor)
+            path = Path(filename)
             try:
                 return await dispatch_tools.t_computer_use(action="screenshot", path=str(path))
             finally:
@@ -175,8 +178,15 @@ class OperationalMixin(RuntimeAccessMixin):
             if self._context_injector is not None and self._context_injector.external is not None:
                 tasks.append(self._context_injector.external.refresh_if_stale())
             if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
-                log.info("embedding caches warmed up")
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                failures = [result for result in results if isinstance(result, BaseException)]
+                if failures:
+                    log.warning(
+                        "warmup_caches.partial failures=%s",
+                        [type(failure).__name__ for failure in failures],
+                    )
+                else:
+                    log.info("embedding caches warmed up")
         except Exception as e:
             log.warning("warmup_caches.failed: %r (first query will build lazily)", e)
 

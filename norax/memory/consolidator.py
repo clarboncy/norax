@@ -181,11 +181,14 @@ class _DedupCache:
         h = _content_hash(text)
         return h in self._seen
 
+    def contains_hash(self, content_hash: str) -> bool:
+        return content_hash in self._seen
+
     def commit(self, texts: list[str]) -> None:
-        for text in texts:
-            self._seen.add(_content_hash(text))
-            if len(self._seen) > _MAX_DEDUP_ENTRIES:
-                raise ValueError("canonical dedup cache exceeds its entry limit")
+        new_hashes = {_content_hash(text) for text in texts} - self._seen
+        if len(self._seen) + len(new_hashes) > _MAX_DEDUP_ENTRIES:
+            raise ValueError("canonical dedup cache exceeds its entry limit")
+        self._seen.update(new_hashes)
 
     def seed_from_dir(self, directory: Path) -> None:
         if not directory.exists():
@@ -248,6 +251,8 @@ def _strip_secrets(text: str) -> str:
 
 
 def _safe_parse_result(raw: str) -> dict:
+    if not isinstance(raw, str):
+        return {}
     result: dict = {}
     try:
         d = json.loads(raw)
@@ -490,11 +495,18 @@ class MemoryConsolidator:
         self.archive_dir.mkdir(parents=True, exist_ok=True)
         for path in files:
             if path.suffix == ".jsonl":
-                archive_regular_file(
-                    path.with_suffix(".md"),
-                    self.archive_dir,
-                    max_bytes=_MAX_INPUT_BYTES,
-                )
+                companion = path.with_suffix(".md")
+                try:
+                    archive_regular_file(
+                        companion,
+                        self.archive_dir,
+                        max_bytes=_MAX_INPUT_BYTES,
+                    )
+                except (OSError, ValueError) as exc:
+                    # A companion is optional and was not one of the verified
+                    # inputs. Never let an unsafe/stale companion prevent the
+                    # validated JSONL source from being archived.
+                    log.warning("consolidator ignored unsafe companion %s: %s", companion, exc)
             archived = archive_regular_file(
                 path,
                 self.archive_dir,
@@ -532,14 +544,14 @@ class MemoryConsolidator:
 
             for line in sem:
                 line_hash = _content_hash(line)
-                if not self._dedup.contains(line) and line_hash not in staged_hashes:
+                if not self._dedup.contains_hash(line_hash) and line_hash not in staged_hashes:
                     sem_lines.append(line)
                     staged_hashes.add(line_hash)
                 else:
                     res.skipped_dup += 1
             for line in proc:
                 line_hash = _content_hash(line)
-                if not self._dedup.contains(line) and line_hash not in staged_hashes:
+                if not self._dedup.contains_hash(line_hash) and line_hash not in staged_hashes:
                     proc_lines.append(line)
                     staged_hashes.add(line_hash)
                 else:

@@ -71,7 +71,7 @@ branch = true
 
 [tool.coverage.report]
 # Never let integer display rounding turn a sub-threshold run green.
-fail_under = 64.5
+fail_under = 74.0
 precision = 2
 show_missing = true
 

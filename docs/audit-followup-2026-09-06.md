@@ -49,15 +49,37 @@ No new comparative benchmarks were run during this final audit pass.
   unfinished work.
 - Norax's identity and memory architecture remain intact. Public source
   contains neither deployment's learned memories or environment files.
+- Memory decay and fact evolution now use bounded, symlink-safe persistence;
+  archival is collision-safe and rollback-safe, corrupt records are isolated,
+  and private append permissions are enforced. Consolidation preflights
+  deduplication atomically so a companion-file problem cannot destroy source
+  evidence.
+- Vector backends validate finite dimensions consistently, preserve arbitrary
+  record identifiers across Qdrant, and actually exercise configured fallback
+  order. Learned tool experience preserves evidence counts while removing raw
+  arguments, and persisted prediction state cannot double-count on reload.
+- Runtime screenshot probes use unique temporary paths, watchdog identities no
+  longer collide on duplicate task names, retry observers cannot break retries,
+  circuit configurations are not shared mutable state, and public health
+  diagnostics are bounded and secret-scrubbed.
+- Literal successful capability receipts now recover failed, degraded, or stale
+  health state. Capability diagnostics are redacted and bounded before storage
+  or logging; this work occurs only during state changes, not in model-token or
+  tool-dispatch hot loops.
 
 ## Verification
 
-`scripts/quality_gate.py` passed on this source:
+`scripts/quality_gate.py` passed on the current source:
 
-- 1,793 tests in the branch-coverage run, plus three isolated subprocess
+- 2,063 tests in the branch-coverage selection, plus three isolated subprocess
   acceptance tests; 10 desktop-affecting host tests were intentionally excluded.
-- 74.08% statement coverage, 61.33% branch coverage, 70.72% combined coverage;
-  all 28 critical-module floors passed without lowering thresholds.
+- 77.58% statement coverage, 65.71% branch coverage, 74.44% combined coverage;
+  all 40 critical-module floors passed. The aggregate release floors were
+  ratcheted to 77% statements, 65% branches, and 74% combined.
+- Sixteen focused production modules now have enforced 100% statement and
+  branch coverage, including runtime validation, capability state, health,
+  retry, circuit-breaker, watchdog, operations, and cognition boundaries. The
+  aggregate is not described as 100%; uncovered behavior remains audit work.
 - Lockfile, systemd units, every shell helper, Ruff lint/format, mypy,
   compilation, stack boundaries, publication hygiene, and secret scanning.
 - Real loopback connector transport tests include concurrent MCP calls,

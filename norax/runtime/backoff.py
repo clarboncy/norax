@@ -106,22 +106,23 @@ async def retry_with_backoff[T](
     if isinstance(max_retries, bool) or not isinstance(max_retries, int) or max_retries < 0:
         raise ValueError("max_retries must be a non-negative integer")
     backoff = ExponentialBackoff(base=base, max_delay=max_delay, jitter=jitter)
-    last_error: Exception | None = None
-
-    for attempt in range(max_retries + 1):
+    attempt = 0
+    while True:
         try:
             result = await operation()
             if attempt > 0:
                 log.info("retry succeeded attempt=%d", attempt)
             return result
         except retry_on as e:
-            last_error = e
             if attempt >= max_retries:
                 log.warning("retry exhausted attempts=%d error=%s", attempt + 1, str(e)[:100])
                 raise
             delay = backoff.next_delay()
             if on_retry:
-                on_retry(attempt, e, delay)
+                try:
+                    on_retry(attempt, e, delay)
+                except Exception:  # noqa: BLE001
+                    log.exception("retry observer failed attempt=%d", attempt)
             log.debug(
                 "retry attempt=%d/%d delay=%.2fs error=%s",
                 attempt + 1,
@@ -130,7 +131,4 @@ async def retry_with_backoff[T](
                 str(e)[:80],
             )
             await asyncio.sleep(delay)
-
-    # Should never reach here
-    assert last_error is not None
-    raise last_error
+            attempt += 1

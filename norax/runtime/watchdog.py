@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -31,9 +32,6 @@ class WatchdogEntry:
     name: str
     started_at: float
     timeout_sec: float
-    task: asyncio.Task | None = None
-    _timer: asyncio.Task | None = None
-    _cancelled: bool = False
 
 
 class Watchdog:
@@ -45,7 +43,7 @@ class Watchdog:
     """
 
     def __init__(self) -> None:
-        self._entries: dict[str, WatchdogEntry] = {}
+        self._entries: dict[object, WatchdogEntry] = {}
         self._total_timeouts: int = 0
         self._total_completions: int = 0
 
@@ -71,30 +69,43 @@ class Watchdog:
         Raises:
             asyncio.TimeoutError: if task exceeds timeout
         """
+        if not isinstance(name, str) or not name.strip() or len(name) > 160:
+            raise ValueError("watchdog name must contain 1-160 characters")
+        if (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, int | float)
+            or not math.isfinite(float(timeout))
+            or timeout <= 0
+        ):
+            raise ValueError("watchdog timeout must be a positive finite number")
         entry = WatchdogEntry(
-            name=name,
-            started_at=time.time(),
-            timeout_sec=timeout,
+            name=name.strip(),
+            started_at=time.monotonic(),
+            timeout_sec=float(timeout),
         )
-        self._entries[name] = entry
+        token = object()
+        self._entries[token] = entry
 
         try:
-            result = await asyncio.wait_for(coro, timeout=timeout)
+            result = await asyncio.wait_for(coro, timeout=float(timeout))
             self._total_completions += 1
             return result
         except TimeoutError:
             self._total_timeouts += 1
-            elapsed = time.time() - entry.started_at
-            log.error("watchdog: %s timed out after %.1fs", name, elapsed)
+            elapsed = time.monotonic() - entry.started_at
+            log.error("watchdog: %s timed out after %.1fs", entry.name, elapsed)
             if on_timeout:
-                on_timeout(name, elapsed)
+                try:
+                    on_timeout(entry.name, elapsed)
+                except Exception:  # noqa: BLE001
+                    log.exception("watchdog timeout callback failed for %s", entry.name)
             raise
         finally:
-            self._entries.pop(name, None)
+            self._entries.pop(token, None)
 
     def active_tasks(self) -> list[dict[str, Any]]:
         """Return info about tasks being watched."""
-        now = time.time()
+        now = time.monotonic()
         return [
             {
                 "name": e.name,

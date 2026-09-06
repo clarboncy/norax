@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..gateway_client import GatewayUpstreamError, SpendGuardTripped
+from ..safety.secrets import redact
 from .capability_registry import CapabilityRegistry
 from .validation import _explicit_result_ok
 
@@ -61,7 +62,14 @@ def _refresh_tool_capability_evidence(
 def _remote_relay_probe_result(payload: dict[str, Any]) -> dict[str, Any]:
     """Translate relay health into ready/degraded capability evidence."""
     relay_ok = payload.get("ok") is True
-    live_count = int(payload.get("live_count", 0))
+    raw_count = payload.get("live_count", 0)
+    live_count = (
+        max(0, int(raw_count))
+        if not isinstance(raw_count, bool) and isinstance(raw_count, int | float)
+        else 0
+    )
+    raw_nodes = payload.get("live_nodes", [])
+    live_nodes = raw_nodes[:100] if isinstance(raw_nodes, list) else []
     return {
         "ok": relay_ok,
         "degraded_reason": (
@@ -70,7 +78,7 @@ def _remote_relay_probe_result(payload: dict[str, Any]) -> dict[str, Any]:
             else ""
         ),
         "live_count": live_count,
-        "live_nodes": payload.get("live_nodes", []),
+        "live_nodes": live_nodes,
     }
 
 
@@ -84,7 +92,7 @@ def _turn_failure_message(error: BaseException) -> str:
             "`NORAX_LLM_MAX_CALLS_PER_MIN` / `NORAX_LLM_MAX_CALLS_PER_HOUR`."
         )
     if isinstance(error, GatewayUpstreamError) and error.status == 402:
-        detail = error.upstream_message.strip()
+        detail = str(redact(error.upstream_message.strip()))
         detail_line = f"\nProvider detail: {detail[:500]}" if detail else ""
         return (
             "💳 **Provider balance alert (HTTP 402)** — the selected model could "
@@ -112,6 +120,8 @@ def _deferred_runtime_lifecycle_action(trace: list[dict]) -> str | None:
     """Return the final validated self-lifecycle request from a tool trace."""
     action: str | None = None
     for item in trace:
+        if not isinstance(item, dict):
+            continue
         result = item.get("result")
         if not isinstance(result, dict) or not _explicit_result_ok(result):
             continue

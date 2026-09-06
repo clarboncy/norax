@@ -25,7 +25,7 @@ import logging
 import math
 import os
 import re
-import shutil
+import stat
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -72,7 +72,17 @@ def _load_access_log(memory_root: Path) -> dict[str, int]:
     if not p.exists():
         return {}
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
+        raw = json.loads(p.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            return {}
+        return {
+            key: value
+            for key, value in raw.items()
+            if isinstance(key, str)
+            and isinstance(value, int)
+            and not isinstance(value, bool)
+            and value >= 0
+        }
     except (json.JSONDecodeError, OSError):
         return {}
 
@@ -116,6 +126,32 @@ def compute_importance(
 
     importance = weight * recency_factor * min(access_factor, 3.0)
     return max(0.0, min(importance, 1.0))
+
+
+def _archive_file(source: Path, archive_dir: Path, kind: str, entity_id: str, now: float) -> Path:
+    """Move a regular memory file into the archive without overwriting data.
+
+    The source and archive are under one memory root, so a hard link is an
+    atomic no-overwrite commit. If unlinking the source fails, remove the new
+    link and leave the original untouched.
+    """
+    source_stat = source.lstat()
+    if not stat.S_ISREG(source_stat.st_mode):
+        raise OSError("memory archive source must be a regular file")
+    prefix = f"decayed_{kind}_{source.stem}_{int(now * 1_000_000)}_{entity_id}"
+    for suffix in range(10_000):
+        candidate = archive_dir / f"{prefix}{f'_{suffix}' if suffix else ''}.md"
+        try:
+            candidate.hardlink_to(source)
+        except FileExistsError:
+            continue
+        try:
+            source.unlink()
+        except OSError:
+            candidate.unlink(missing_ok=True)
+            raise
+        return candidate
+    raise OSError("could not allocate a unique memory archive name")
 
 
 def run_decay_pass(memory_root: Path | None = None) -> DecayResult:
@@ -185,12 +221,8 @@ def run_decay_pass(memory_root: Path | None = None) -> DecayResult:
                 if importance < ARCHIVE_THRESHOLD:
                     # Archive this file
                     md_file.relative_to(memory_root)
-                    archive_name = f"decayed_{kind}_{md_file.stem}_{int(now)}.md"
-                    archive_path = archive_dir / archive_name
-
                     try:
-                        shutil.copy2(str(md_file), str(archive_path))
-                        md_file.unlink()
+                        _archive_file(md_file, archive_dir, kind, eid, now)
                         result.archived += 1
                         log.info(
                             "decay.archived kind=%s file=%s importance=%.3f age=%.1fd accesses=%d",

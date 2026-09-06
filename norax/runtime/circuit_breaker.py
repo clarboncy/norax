@@ -193,13 +193,12 @@ class CircuitBreakerRegistry:
 
     def __init__(self) -> None:
         self._circuits: dict[str, Circuit] = {}
-        self._default_config = CircuitConfig()
 
     def get_or_create(self, name: str, config: CircuitConfig | None = None) -> Circuit:
         if name not in self._circuits:
             self._circuits[name] = Circuit(
                 name=name,
-                config=config or self._default_config,
+                config=config or CircuitConfig(),
             )
         return self._circuits[name]
 

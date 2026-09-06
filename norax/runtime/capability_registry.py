@@ -21,7 +21,11 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..safety.secrets import redact
+
 log = logging.getLogger("norax.runtime.capability")
+
+_MAX_DIAGNOSTIC_CHARS = 500
 
 STATE_DISABLED = "disabled"
 STATE_INITIALIZING = "initializing"
@@ -48,6 +52,11 @@ def _classify_error(error: BaseException) -> str:
     if "connect" in err_name or "dependency" in err_name or "import" in err_name:
         return ERR_DEPENDENCY
     return ERR_UNKNOWN
+
+
+def _safe_diagnostic(value: object) -> str:
+    """Keep capability diagnostics useful without retaining secrets or floods."""
+    return str(redact(str(value)))[:_MAX_DIAGNOSTIC_CHARS]
 
 
 @dataclass
@@ -133,7 +142,7 @@ class CapabilityRegistry:
             name=name,
             enabled=True,
             state=STATE_DEGRADED,
-            last_error=reason,
+            last_error=_safe_diagnostic(reason),
             last_checked=time.monotonic(),
             last_success=prev.last_success if prev else None,
             required_for_readiness=prev.required_for_readiness if prev else False,
@@ -143,7 +152,7 @@ class CapabilityRegistry:
 
     def mark_failed(self, name: str, error: BaseException) -> None:
         """Record failed initialization with structured logging."""
-        err_str = f"{type(error).__name__}: {error}"
+        err_str = _safe_diagnostic(f"{type(error).__name__}: {error}")
         err_class = _classify_error(error)
         prev = self._caps.get(name)
         self._caps[name] = CapabilityStatus(
@@ -159,11 +168,10 @@ class CapabilityRegistry:
             metadata=prev.metadata if prev else {},
         )
         log.warning(
-            "capability.init_failed name=%s error_class=%s error=%r",
+            "capability.init_failed name=%s error_class=%s error=%s",
             name,
             err_class,
-            error,
-            exc_info=error,
+            err_str,
         )
 
     def mark_stale(self, name: str) -> None:
@@ -174,12 +182,16 @@ class CapabilityRegistry:
             prev.last_checked = time.monotonic()
 
     def touch(self, name: str) -> None:
-        """Record a successful operation — refreshes last_success and clears stale."""
+        """Record successful use and recover any previously unhealthy state."""
         cap = self._caps.get(name)
         if cap:
-            cap.last_success = time.monotonic()
-            if cap.state == STATE_STALE:
-                cap.state = STATE_READY
+            now = time.monotonic()
+            cap.enabled = True
+            cap.state = STATE_READY
+            cap.last_error = ""
+            cap.error_class = ""
+            cap.last_checked = now
+            cap.last_success = now
 
     def update_metadata(self, name: str, **metadata: Any) -> None:
         """Attach bounded probe evidence to a registered capability."""

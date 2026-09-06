@@ -23,15 +23,19 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ..atomic import atomic_write_text
+from ..atomic import atomic_write_text, read_bounded_text
 
 log = logging.getLogger("norax.brain.prediction_network")
+
+_MAX_STATE_BYTES = 16 * 1024 * 1024
+_MAX_TRANSITION_COUNT = 1_000_000_000
 
 
 @dataclass
@@ -58,6 +62,10 @@ class TransitionStats:
 
     def predict(self, from_task: str, top_k: int = 3) -> list[tuple[str, float]]:
         """Given current task, predict likely next tasks."""
+        if isinstance(top_k, bool) or not isinstance(top_k, int):
+            raise TypeError("top_k must be an integer")
+        if top_k <= 0:
+            return []
         if from_task not in self.transitions:
             return []
         total_from = sum(self.transitions[from_task].values())
@@ -165,9 +173,18 @@ _TASK_KEYWORDS: dict[str, set[str]] = {
 
 def _classify_task(text: str) -> str:
     text_lower = (text or "").lower()
+    tokens = set(re.findall(r"[a-z0-9_]+", text_lower))
+    # Common inflections should not turn "run tests" or "fix bugs" into an
+    # unrelated general task. Keep the original tokens and add a lightweight
+    # singular form without introducing a model dependency.
+    tokens.update(token[:-1] for token in tuple(tokens) if len(token) > 3 and token.endswith("s"))
     scores: dict[str, int] = {}
     for task, keywords in _TASK_KEYWORDS.items():
-        score = sum(1 for kw in keywords if kw in text_lower)
+        score = sum(
+            1
+            for keyword in keywords
+            if (keyword in text_lower if " " in keyword else keyword in tokens)
+        )
         if score > 0:
             scores[task] = score
     if not scores:
@@ -224,29 +241,84 @@ class PredictionNetwork:
         self._loaded = False
 
     def load(self) -> None:
-        if self.state_path.exists():
-            try:
-                data = json.loads(self.state_path.read_text())
-                # Load transition stats
-                for from_task, to_dict in data.get("transitions", {}).items():
-                    for to_task, count in to_dict.items():
-                        parsed_count = max(0, int(count))
-                        self.transition_stats.transitions[from_task][to_task] = parsed_count
-                        self.transition_stats.total += parsed_count
-                # Load entity co-occurrence
-                for entity, related in data.get("entity_cooccurrence", {}).items():
-                    for related_entity, count in related.items():
-                        self.entity_cooccurrence[entity][related_entity] = count
-                # Load topic history
-                self.topic_history.extend(data.get("topic_history", []))
-                self.last_episode_timestamp = float(data.get("last_episode_timestamp", 0.0))
-                log.info(
-                    "prediction_network loaded: %d transitions, %d entities",
-                    self.transition_stats.total,
-                    len(self.entity_cooccurrence),
-                )
-            except Exception as e:
-                log.warning("prediction_network load failed: %r", e)
+        try:
+            raw = read_bounded_text(self.state_path, max_bytes=_MAX_STATE_BYTES)
+        except FileNotFoundError:
+            self._loaded = True
+            return
+        except (OSError, UnicodeError, ValueError) as exc:
+            log.warning("prediction_network load failed: %r", exc)
+            self._loaded = True
+            return
+        try:
+            data = json.loads(raw)
+            if not isinstance(data, dict):
+                raise ValueError("prediction network state root must be an object")
+
+            transition_stats = TransitionStats()
+            transitions = data.get("transitions", {})
+            if not isinstance(transitions, dict):
+                transitions = {}
+            for from_task, to_dict in transitions.items():
+                if not isinstance(from_task, str) or not from_task or not isinstance(to_dict, dict):
+                    continue
+                for to_task, count in to_dict.items():
+                    if (
+                        not isinstance(to_task, str)
+                        or not to_task
+                        or isinstance(count, bool)
+                        or not isinstance(count, int | float)
+                        or not math.isfinite(float(count))
+                    ):
+                        continue
+                    parsed_count = max(0, min(_MAX_TRANSITION_COUNT, int(count)))
+                    if parsed_count:
+                        transition_stats.transitions[from_task[:80]][to_task[:80]] = parsed_count
+                        transition_stats.total += parsed_count
+
+            entity_cooccurrence: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+            entity_rows = data.get("entity_cooccurrence", {})
+            if not isinstance(entity_rows, dict):
+                entity_rows = {}
+            for entity, related in entity_rows.items():
+                if not isinstance(entity, str) or not entity or not isinstance(related, dict):
+                    continue
+                for related_entity, count in related.items():
+                    if (
+                        not isinstance(related_entity, str)
+                        or not related_entity
+                        or isinstance(count, bool)
+                        or not isinstance(count, int | float)
+                        or not math.isfinite(float(count))
+                    ):
+                        continue
+                    parsed_count = max(0, min(_MAX_TRANSITION_COUNT, int(count)))
+                    if parsed_count:
+                        entity_cooccurrence[entity[:160]][related_entity[:160]] = parsed_count
+
+            topic_history: deque[str] = deque(maxlen=20)
+            topics = data.get("topic_history", [])
+            if isinstance(topics, list):
+                topic_history.extend(str(topic)[:80] for topic in topics if isinstance(topic, str))
+            timestamp_value = data.get("last_episode_timestamp", 0.0)
+            if isinstance(timestamp_value, bool) or not isinstance(timestamp_value, int | float):
+                timestamp = 0.0
+            else:
+                timestamp = float(timestamp_value)
+                if not math.isfinite(timestamp) or timestamp < 0:
+                    timestamp = 0.0
+
+            self.transition_stats = transition_stats
+            self.entity_cooccurrence = entity_cooccurrence
+            self.topic_history = topic_history
+            self.last_episode_timestamp = timestamp
+            log.info(
+                "prediction_network loaded: %d transitions, %d entities",
+                self.transition_stats.total,
+                len(self.entity_cooccurrence),
+            )
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            log.warning("prediction_network load failed: %r", exc)
         self._loaded = True
 
     def save(self) -> None:
@@ -257,7 +329,7 @@ class PredictionNetwork:
             "last_episode_timestamp": self.last_episode_timestamp,
         }
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_text(self.state_path, json.dumps(data, indent=2))
+        atomic_write_text(self.state_path, json.dumps(data, indent=2), mode=0o600)
 
     def record_turn(
         self,
@@ -274,31 +346,40 @@ class PredictionNetwork:
                 self.transition_stats.record(prev_task, task)
         self.topic_history.append(task)
         # Record entity co-occurrence
-        if entities and len(entities) >= 2:
-            for i, e1 in enumerate(entities):
-                for e2 in entities[i + 1 :]:
+        normalized_entities = list(
+            dict.fromkeys(
+                entity.strip()[:160]
+                for entity in (entities or [])
+                if isinstance(entity, str) and entity.strip()
+            )
+        )
+        if len(normalized_entities) >= 2:
+            for i, e1 in enumerate(normalized_entities):
+                for e2 in normalized_entities[i + 1 :]:
                     self.entity_cooccurrence[e1][e2] += 1
                     self.entity_cooccurrence[e2][e1] += 1
 
     def record_episodes(self, episodes: list[Any]) -> int:
         """Record only episodes newer than the durable replay watermark."""
-        unseen = sorted(
-            (
-                episode
-                for episode in episodes
-                if float(getattr(episode, "timestamp", 0.0) or 0.0) > self.last_episode_timestamp
-            ),
-            key=lambda episode: float(getattr(episode, "timestamp", 0.0) or 0.0),
-        )
-        for episode in unseen:
+        unseen: list[tuple[float, Any]] = []
+        for episode in episodes:
+            raw_timestamp = getattr(episode, "timestamp", 0.0)
+            if isinstance(raw_timestamp, bool):
+                continue
+            try:
+                timestamp = float(raw_timestamp or 0.0)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if math.isfinite(timestamp) and timestamp > self.last_episode_timestamp:
+                unseen.append((timestamp, episode))
+        unseen.sort(key=lambda pair: pair[0])
+        for _, episode in unseen:
             self.record_turn(
                 getattr(episode, "user_input", "") or "",
                 task_type=getattr(episode, "task_type", "") or "",
             )
         if unseen:
-            self.last_episode_timestamp = max(
-                float(getattr(episode, "timestamp", 0.0) or 0.0) for episode in unseen
-            )
+            self.last_episode_timestamp = unseen[-1][0]
         return len(unseen)
 
     def predict_next(
@@ -309,6 +390,10 @@ class PredictionNetwork:
         top_k: int = 3,
     ) -> list[Prediction]:
         """Predict likely next topics and pre-fetchable entities."""
+        if isinstance(top_k, bool) or not isinstance(top_k, int):
+            raise TypeError("top_k must be an integer")
+        if top_k <= 0:
+            return []
         predictions: list[Prediction] = []
         tool_trace = tool_trace or []
         conversation_history = conversation_history or []
@@ -321,7 +406,7 @@ class PredictionNetwork:
         )
 
         # Use learned transitions if we have enough data, otherwise use defaults
-        if self.transition_stats.total >= 10:
+        if self.transition_stats.total >= 10 and current_task in self.transition_stats.transitions:
             transitions = self.transition_stats.predict(current_task, top_k)
         else:
             # Use default transition matrix
@@ -362,7 +447,7 @@ class PredictionNetwork:
 
         # 3. Tool pattern prediction
         if tool_trace:
-            tool_names = [t.get("name", "") for t in tool_trace]
+            tool_names = [t.get("name", "") for t in tool_trace if isinstance(t, dict)]
             # If we see read+edit, predict testing next
             if (
                 "read" in tool_names
@@ -431,7 +516,7 @@ class PredictionNetwork:
                     # Fallback: scan semantic memory for topic keywords
                     hits = []
                     for line in self.memory_store.semantic:
-                        if topic.lower() in line.lower():
+                        if isinstance(line, str) and topic.lower() in line.lower():
                             hits.append(line)
                     if hits:
                         results[pred.topic] = hits[:3]
@@ -443,16 +528,18 @@ class PredictionNetwork:
         """Extract entity-like terms from text and tool trace."""
         entities: list[str] = []
         # File paths
-        for m in re.finditer(r"\b([a-z_]+\.py|[a-z_]+\.js|[a-z_]+\.ts)\b", text):
+        for m in re.finditer(r"\b([a-z_][a-z0-9_]*\.(?:py|js|ts))\b", text, re.I):
             entities.append(m.group(1))
         # Capitalized terms (likely proper nouns / entity names)
         for m in re.finditer(r"\b([A-Z][a-z]{2,})\b", text):
             entities.append(m.group(1))
         # Tool names from trace
         for t in tool_trace:
+            if not isinstance(t, dict):
+                continue
             name = t.get("name", "")
-            if name:
-                entities.append(name)
+            if isinstance(name, str) and name:
+                entities.append(name[:160])
         return list(dict.fromkeys(entities))  # dedupe preserving order
 
     def summary(self) -> str:
