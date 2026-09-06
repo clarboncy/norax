@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -154,3 +155,83 @@ async def test_rotation_uses_collision_resistant_names_and_verifies(tmp_path: Pa
     rotations = list(tmp_path.glob("events-*.jsonl"))
     assert len(rotations) == 1
     assert verify_all_generations(tmp_path)["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_rotation_anchor_uses_latest_other_writer_tail(tmp_path: Path):
+    from norax.verify_event_chain import verify_all_generations
+
+    path = tmp_path / "events.jsonl"
+    first = EventLog(path, rotate_bytes=0)
+    second = EventLog(path, rotate_bytes=0)
+    await first.append("first", {})
+    await second.append("second", {})
+    first.rotate_bytes = path.stat().st_size + 1
+    await first.append("third", {})
+
+    result = verify_all_generations(tmp_path)
+    assert result["ok"] is True, result
+    assert result["total_records"] == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("empty_current", [False, True])
+async def test_missing_current_after_rotation_cannot_restart_chain(tmp_path: Path, empty_current):
+    path = tmp_path / "events.jsonl"
+    writer = EventLog(path, rotate_bytes=1)
+    await writer.append("first", {})
+    await writer.append("second", {})
+    original = path.read_bytes()
+    path.unlink()
+    if empty_current:
+        path.touch()
+
+    with pytest.raises(ValueError, match="missing|empty|rotation"):
+        await writer.append("must_not_restart_at_genesis", {})
+    assert not path.exists() or path.read_bytes() == b""
+    assert original
+
+
+@pytest.mark.asyncio
+async def test_unterminated_record_cannot_be_concatenated_with_next_event(tmp_path: Path):
+    path = tmp_path / "events.jsonl"
+    writer = EventLog(path)
+    await writer.append("first", {})
+    incomplete = path.read_bytes().rstrip(b"\n")
+    path.write_bytes(incomplete)
+
+    with pytest.raises(ValueError, match="unterminated|incomplete"):
+        await writer.append("second", {})
+    assert path.read_bytes() == incomplete
+
+
+@pytest.mark.asyncio
+async def test_empty_existing_file_does_not_create_empty_rotation(tmp_path: Path):
+    from norax.verify_event_chain import verify_all_generations
+
+    path = tmp_path / "events.jsonl"
+    path.touch()
+    writer = EventLog(path, rotate_bytes=1)
+    await writer.append("first", {})
+
+    result = verify_all_generations(tmp_path)
+    assert result["ok"] is True, result
+    assert result["generations"] == 1
+
+
+@pytest.mark.asyncio
+async def test_concurrent_writers_preserve_every_record_across_rotations(tmp_path: Path):
+    from norax.verify_event_chain import verify_all_generations
+
+    writers = [EventLog(tmp_path / "events.jsonl", rotate_bytes=1800) for _ in range(4)]
+    await asyncio.gather(
+        *(
+            writers[index % len(writers)].append("concurrent", {"index": index})
+            for index in range(80)
+        )
+    )
+
+    result = verify_all_generations(tmp_path)
+    assert result["ok"] is True, result
+    assert result["total_records"] == 80
+    assert result["generations"] > 1

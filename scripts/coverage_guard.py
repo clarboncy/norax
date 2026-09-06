@@ -33,14 +33,15 @@ DEFAULT_CRITICAL_FLOORS: Final[dict[str, tuple[float, float]]] = {
     "norax/memory/index.py": (86.0, 72.0),
     "norax/memory/temporal_graph.py": (97.0, 92.0),
     "norax/memory/user_model.py": (95.0, 83.0),
+    "norax/observability/log.py": (80.0, 62.0),
     # Runtime behavior is decomposed by ownership. Keep every production
     # boundary explicit so moving code cannot make the release gate easier.
-    "norax/runtime/cognition.py": (27.0, 18.0),
+    "norax/runtime/cognition.py": (55.0, 48.0),
     "norax/runtime/core.py": (70.0, 48.0),
-    "norax/runtime/delivery.py": (68.0, 55.0),
+    "norax/runtime/delivery.py": (74.0, 65.0),
     "norax/runtime/health.py": (88.0, 78.0),
     "norax/runtime/history.py": (72.0, 64.0),
-    "norax/runtime/lifecycle.py": (70.0, 65.0),
+    "norax/runtime/lifecycle.py": (74.0, 71.0),
     "norax/runtime/model_management.py": (62.0, 45.0),
     "norax/runtime/operations.py": (38.0, 40.0),
     "norax/runtime/session.py": (58.0, 45.0),

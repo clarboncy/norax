@@ -4,16 +4,19 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
+import math
 import os
 import re
+import stat
 import subprocess
 import time
 import urllib.error
 import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from norax.atomic import append_bounded_text, atomic_write_text, read_bounded_text
 from norax.verify_event_chain import _verify_single_file
@@ -21,6 +24,7 @@ from norax.verify_event_chain import _verify_single_file
 TARGET_SECONDS = 72 * 60 * 60
 MIN_SAMPLES = 200
 MAX_HISTORY = 5000
+MAX_SAMPLE_GAP_SECONDS = 180
 MAX_EVIDENCE_BYTES = 32 * 1024 * 1024
 _CAMPAIGN_RE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}")
 
@@ -94,10 +98,43 @@ def evaluate_status(status: dict[str, Any], now_epoch: float | None = None) -> d
     started = float(status.get("started_epoch", now_epoch))
     elapsed = max(0.0, now_epoch - started)
     samples = status.get("samples") or []
+    timestamps: list[float] = []
+    timestamps_valid = True
+    for sample in samples:
+        try:
+            timestamp = datetime.fromisoformat(str(sample["timestamp"]).replace("Z", "+00:00"))
+            if timestamp.tzinfo is None:
+                raise ValueError("sample timestamp must include a timezone")
+            epoch = timestamp.timestamp()
+            if not started <= epoch <= now_epoch or (timestamps and epoch <= timestamps[-1]):
+                raise ValueError("sample timestamps must be ordered and within the campaign")
+            timestamps.append(epoch)
+        except (KeyError, TypeError, ValueError, OverflowError, OSError):
+            timestamps_valid = False
+            break
+    # Evaluate the most recent 72 hours so bounded history can continue after
+    # a successful campaign. One-minute sampling tolerates up to three minutes
+    # between observations; a long outage cannot be hidden by a sample count.
+    window_start = max(started, now_epoch - TARGET_SECONDS)
+    window_times = [epoch for epoch in timestamps if epoch >= window_start - MAX_SAMPLE_GAP_SECONDS]
+    sampling_continuous = (
+        timestamps_valid
+        and len(window_times) >= MIN_SAMPLES
+        and window_times[0] <= window_start + MAX_SAMPLE_GAP_SECONDS
+        and now_epoch - window_times[-1] <= MAX_SAMPLE_GAP_SECONDS
+        and window_times[-1] - window_times[0] >= TARGET_SECONDS - MAX_SAMPLE_GAP_SECONDS
+        and all(
+            later - earlier <= MAX_SAMPLE_GAP_SECONDS
+            for earlier, later in zip(window_times, window_times[1:], strict=False)
+        )
+    )
     latencies = [
         float(sample["completion_latency_ms"])
         for sample in samples
         if isinstance(sample.get("completion_latency_ms"), (int, float))
+        and not isinstance(sample["completion_latency_ms"], bool)
+        and math.isfinite(sample["completion_latency_ms"])
+        and sample["completion_latency_ms"] >= 0
     ]
     ready_samples = sum(sample.get("ready") is True for sample in samples)
     discord_samples = sum(sample.get("discord_connected") is True for sample in samples)
@@ -107,13 +144,18 @@ def evaluate_status(status: dict[str, Any], now_epoch: float | None = None) -> d
     gates = {
         "duration_72h": elapsed >= TARGET_SECONDS,
         "minimum_samples": total >= MIN_SAMPLES,
+        "observed_72h_window": sampling_continuous,
+        "metrics_available": total > 0
+        and all(sample.get("metrics_available") is True for sample in samples),
         "completion_verified": total > 0
         and all(sample.get("completion_ok") is True for sample in samples),
         "ready_rate_99_5": ready_rate >= 0.995,
         "discord_rate_99_5": discord_rate >= 0.995,
-        "completion_p95_under_5s": bool(latencies)
-        and (_percentile(latencies, 0.95) or 999999) < 5000,
-        "event_chain_clean": total > 0 and all(sample.get("event_chain_ok") for sample in samples),
+        "completion_p95_under_5s": total > 0
+        and len(latencies) == total
+        and cast(float, _percentile(latencies, 0.95)) < 5000,
+        "event_chain_clean": total > 0
+        and all(sample.get("event_chain_ok") is True for sample in samples),
         "no_restart_growth": total > 0
         and all(
             sample.get("restart_detected", sample.get("restart_delta", 0) != 0) is False
@@ -127,15 +169,9 @@ def evaluate_status(status: dict[str, Any], now_epoch: float | None = None) -> d
             for sample in samples
         ),
         "no_brain_errors": total > 0
-        and all(
-            sample.get("brain_error_delta", sample.get("brain_errors", 0)) == 0
-            for sample in samples
-        ),
+        and all(sample.get("brain_error_delta") == 0 for sample in samples),
         "no_agent_turn_failures": total > 0
-        and all(
-            sample.get("agent_turn_failure_delta", sample.get("agent_turn_failures", 0)) == 0
-            for sample in samples
-        ),
+        and all(sample.get("agent_turn_failure_delta") == 0 for sample in samples),
     }
     return {
         "state": "passed"
@@ -154,15 +190,28 @@ def evaluate_status(status: dict[str, Any], now_epoch: float | None = None) -> d
     }
 
 
-def _metric_value(text: str, name: str) -> float:
+def _metric_value(text: str, name: str, *, allow_empty_family: bool = False) -> float | None:
     total = 0.0
+    observed = False
+    pattern = re.compile(rf"^{re.escape(name)}(?:\{{.*\}})?\s+(\S+)(?:\s+\S+)?$")
     for line in text.splitlines():
         if line.startswith(name + "{") or line.startswith(name + " "):
+            match = pattern.fullmatch(line)
+            if match is None:
+                return None
             try:
-                total += float(line.rsplit(" ", 1)[-1])
+                value = float(match.group(1))
             except ValueError:
-                continue
-    return total
+                return None
+            if not math.isfinite(value) or value < 0:
+                return None
+            observed = True
+            total += value
+    if not math.isfinite(total):
+        return None
+    if observed or (allow_empty_family and f"# TYPE {name} counter" in text.splitlines()):
+        return total
+    return None
 
 
 def _get_metrics(base_url: str) -> str:
@@ -219,8 +268,8 @@ def collect_sample(
     base_url: str,
     event_log: Path,
     baseline_restarts: int,
-    baseline_brain_errors: float = 0.0,
-    baseline_agent_turn_failures: float = 0.0,
+    baseline_brain_errors: float | None = 0.0,
+    baseline_agent_turn_failures: float | None = 0.0,
     baseline_service_invocation_id: str = "",
 ) -> dict[str, Any]:
     status_code, ready = _get_json(base_url.rstrip("/") + "/readyz")
@@ -239,13 +288,13 @@ def collect_sample(
     discord = components.get("discord") or {}
     probe = components.get("completion_probe") or {}
     chain = _verify_single_file(event_log)
-    brain_errors = _metric_value(metrics, "norax_brain_errors_total")
+    brain_errors = _metric_value(metrics, "norax_brain_errors_total", allow_empty_family=True)
     agent_turn_failures = _metric_value(metrics, "norax_agent_turn_failed_total")
     return {
         "timestamp": _now(),
         "ready": status_code == 200 and ready.get("ok") is True,
         "ready_http": status_code,
-        "discord_connected": bool(discord.get("connected")),
+        "discord_connected": discord.get("connected") is True,
         "completion_ok": probe.get("ok") is True and probe.get("completion_verified") is True,
         "completion_latency_ms": probe.get("latency_ms")
         if probe.get("completion_verified") is True
@@ -254,9 +303,22 @@ def collect_sample(
         "event_chain_ok": chain.get("ok") is True,
         "event_records": chain.get("records", 0),
         "brain_errors": brain_errors,
-        "brain_error_delta": max(0.0, brain_errors - baseline_brain_errors),
+        "metrics_available": all(
+            value is not None
+            for value in (
+                brain_errors,
+                agent_turn_failures,
+                baseline_brain_errors,
+                baseline_agent_turn_failures,
+            )
+        ),
+        "brain_error_delta": brain_errors - baseline_brain_errors
+        if brain_errors is not None and baseline_brain_errors is not None
+        else None,
         "agent_turn_failures": agent_turn_failures,
-        "agent_turn_failure_delta": max(0.0, agent_turn_failures - baseline_agent_turn_failures),
+        "agent_turn_failure_delta": agent_turn_failures - baseline_agent_turn_failures
+        if agent_turn_failures is not None and baseline_agent_turn_failures is not None
+        else None,
         "service_active": service.get("ActiveState") == "active"
         and service.get("SubState") == "running",
         "service_query_ok": service.get("query_ok") is True,
@@ -288,6 +350,24 @@ def main() -> int:
     burnin_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     if os.name == "posix":
         burnin_dir.chmod(0o700)
+    descriptor = os.open(
+        burnin_dir / ".collector.lock",
+        os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0),
+        0o600,
+    )
+    with os.fdopen(descriptor, "a+") as lock:
+        info = os.fstat(lock.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise ValueError("collector lock must be a singly linked regular file")
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            return _collect_campaign(args, burnin_dir)
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+def _collect_campaign(args: argparse.Namespace, burnin_dir: Path) -> int:
+    """Commit one sample while holding the collector's process lock."""
     status_path = burnin_dir / "status.json"
     history_path = burnin_dir / "history.json"
     evidence_path = burnin_dir / "evidence.jsonl"
@@ -300,13 +380,15 @@ def main() -> int:
         metrics = _get_metrics(args.base_url)
         service = _service_state("norax-ai.service")
         status = {
-            "version": 3,
+            "version": 4,
             "campaign_id": args.start_new_campaign or "default",
             "started_at": _now(),
             "started_epoch": time.time(),
             "baseline_restarts": int(service.get("NRestarts", 0) or 0),
             "baseline_service_invocation_id": str(service.get("InvocationID", "") or ""),
-            "baseline_brain_errors": _metric_value(metrics, "norax_brain_errors_total"),
+            "baseline_brain_errors": _metric_value(
+                metrics, "norax_brain_errors_total", allow_empty_family=True
+            ),
             "baseline_agent_turn_failures": _metric_value(metrics, "norax_agent_turn_failed_total"),
             "samples": [],
         }
@@ -314,8 +396,8 @@ def main() -> int:
         args.base_url,
         args.state_dir / "events.jsonl",
         int(status.get("baseline_restarts", 0)),
-        float(status.get("baseline_brain_errors", 0.0)),
-        float(status.get("baseline_agent_turn_failures", 0.0)),
+        status.get("baseline_brain_errors"),
+        status.get("baseline_agent_turn_failures"),
         str(status.get("baseline_service_invocation_id", "") or ""),
     )
     status.setdefault("samples", []).append(sample)

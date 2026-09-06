@@ -2,6 +2,12 @@
 
 ## Disposition
 
+This document records the earlier audit and modularization checks. The
+[continued audit](audit-followup-2026-09-05.md) records subsequently discovered
+defects, newer measurements, and the remaining deployment acceptance work.
+Source synchronization must not be interpreted as activation in a running
+Python process.
+
 The repository-wide source gate is green and the audited source is deployed to
 the Norax user service. The running deployment is completion-verified on its
 configured local model, the remote relay is healthy, the operational monitor

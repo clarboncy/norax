@@ -176,7 +176,36 @@ class EventLog:
         self._lock = asyncio.Lock()
         self._writable = True
         self._last_write_error = ""
-        self._prev_hash = self._load_tail_hash()
+        # A writer may be rotating or halfway through a multi-write append.
+        # Read the initial tail under the same lock as subsequent appends.
+        with self._process_lock():
+            self._prev_hash = self._load_tail_hash()
+
+    @contextmanager
+    def _process_lock(self):
+        import fcntl
+
+        lock_path = self.path.with_suffix(self.path.suffix + ".lock")
+        descriptor = _open_regular(lock_path, os.O_RDWR | os.O_CREAT)
+        with os.fdopen(descriptor, "a+") as lock_fh:
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+
+    def _empty_tail_hash(self) -> str:
+        """Allow genesis only for a new log, never after lost current data."""
+        anchor = self.path.with_suffix(self.path.suffix + ".anchor")
+        if (
+            getattr(self, "_prev_hash", _GENESIS_HASH) != _GENESIS_HASH
+            or anchor.exists()
+            or anchor.is_symlink()
+            or next(self.path.parent.glob(f"{self.path.stem}-*{self.path.suffix}"), None)
+            is not None
+        ):
+            raise ValueError("event-log current file is missing or empty after existing history")
+        return _GENESIS_HASH
 
     @contextmanager
     def trace_scope(self, trace_id: str | None = None):
@@ -203,12 +232,15 @@ class EventLog:
         try:
             descriptor = _open_regular(self.path, os.O_RDONLY)
         except FileNotFoundError:
-            return _GENESIS_HASH
+            return self._empty_tail_hash()
         with os.fdopen(descriptor, "rb") as fh:
             fh.seek(0, 2)
             size = fh.tell()
             if size == 0:
-                return _GENESIS_HASH
+                return self._empty_tail_hash()
+            fh.seek(-1, os.SEEK_END)
+            if fh.read(1) != b"\n":
+                raise ValueError("event-log tail is incomplete: unterminated record")
             # Read the entire file if small enough, otherwise grow a window
             # from the tail until we capture a complete non-empty last line.
             # A line is complete when it is followed by \n or when we've
@@ -232,7 +264,7 @@ class EventLog:
             if not last_line:
                 if size > _MAX_EVENT_LINE_BYTES:
                     raise ValueError("event-log tail line exceeds the size limit")
-                return _GENESIS_HASH
+                raise ValueError("event-log tail contains no complete record")
             try:
                 record = json.loads(last_line)
             except (UnicodeError, json.JSONDecodeError) as exc:
@@ -295,13 +327,7 @@ class EventLog:
         attrs: dict[str, Any],
     ) -> None:
         """Append one record with an advisory process-wide lock."""
-        import fcntl
-
-        lock_path = self.path.with_suffix(self.path.suffix + ".lock")
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        lock_descriptor = _open_regular(lock_path, os.O_RDWR | os.O_CREAT)
-        with os.fdopen(lock_descriptor, "a+") as lock_fh:
-            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+        with self._process_lock():
             try:
                 # Under the fcntl lock, always re-read the on-disk tail: another
                 # process may have appended since our cached _prev_hash was set.
@@ -348,8 +374,6 @@ class EventLog:
                 self._writable = False
                 self._last_write_error = f"{type(exc).__name__}: {exc}"
                 raise
-            finally:
-                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
 
     def _write_line(self, line: str) -> None:
         payload = line.encode()
@@ -376,9 +400,9 @@ class EventLog:
             current_size = os.fstat(descriptor).st_size
         finally:
             os.close(descriptor)
-        if current_size + incoming_bytes <= self.rotate_bytes:
+        if current_size == 0 or current_size + incoming_bytes <= self.rotate_bytes:
             return
-        anchor = self._load_tail_hash()
+        anchor = self._load_tail_hash(ignore_cache=True)
         ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
         rotated = self.path.with_name(f"{self.path.stem}-{ts}{self.path.suffix}")
         if rotated.exists() or rotated.is_symlink():

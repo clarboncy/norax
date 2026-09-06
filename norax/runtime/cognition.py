@@ -161,43 +161,42 @@ class CognitionMixin(RuntimeAccessMixin):
                 idle_sec = time.time() - self._last_turn_time
                 if idle_sec < IDLE_THRESHOLD:
                     continue
+                if self._turn_work_count > 0 or any(
+                    not task.done() for task in self._active_turn_tasks.values()
+                ):
+                    continue
                 if self._memory_store is None:
                     continue
                 # Check if there's anything in sleep/ to consolidate
                 sleep_dir = self._memory_store.root / "sleep"
-                if not sleep_dir.exists():
-                    continue
                 buffers = list(sleep_dir.glob("buffer-*.md"))
                 spills = list(sleep_dir.glob("spill-*.jsonl"))
                 spill_mds = list(sleep_dir.glob("spill-*.md"))
-                if not buffers and not spills and not spill_mds:
-                    continue
                 total_files = len(buffers) + len(spills) + len(spill_mds)
-                log.info(
-                    "sleep_consolidation: idle %.0fs, %d files (buffers=%d spills=%d spill_mds=%d)",
-                    idle_sec,
-                    total_files,
-                    len(buffers),
-                    len(spills),
-                    len(spill_mds),
-                )
-                try:
-                    if self._memory_coordinator is None:
-                        continue
-                    result = await self._memory_coordinator.consolidate_sleep()
-                    if result["canonical_writes"]:
-                        await self._memory_coordinator.sync_projections()
-                    await self.events.append("sleep_consolidation", result)
+                if total_files and self._memory_coordinator is not None:
                     log.info(
-                        "sleep_consolidation: files=%d spills=%d candidates=%d writes=%d duplicates=%d",
-                        result["files_processed"],
-                        result["spills_processed"],
-                        result["candidates_seen"],
-                        result["canonical_writes"],
-                        result["duplicates_skipped"],
+                        "sleep_consolidation: idle %.0fs, %d files (buffers=%d spills=%d spill_mds=%d)",
+                        idle_sec,
+                        total_files,
+                        len(buffers),
+                        len(spills),
+                        len(spill_mds),
                     )
-                except Exception as e:
-                    log.warning("sleep_consolidation.error: %r", e)
+                    try:
+                        result = await self._memory_coordinator.consolidate_sleep()
+                        if result["canonical_writes"]:
+                            await self._memory_coordinator.sync_projections()
+                        await self.events.append("sleep_consolidation", result)
+                        log.info(
+                            "sleep_consolidation: files=%d spills=%d candidates=%d writes=%d duplicates=%d",
+                            result["files_processed"],
+                            result["spills_processed"],
+                            result["candidates_seen"],
+                            result["canonical_writes"],
+                            result["duplicates_skipped"],
+                        )
+                    except Exception as e:
+                        log.warning("sleep_consolidation.error: %r", e)
 
                 # Verified trajectory replay is an explicit learning feature.
                 if self._idle_learning_enabled and self._episodic is not None:
@@ -258,11 +257,17 @@ class CognitionMixin(RuntimeAccessMixin):
 
                         event_log = getattr(self.events, "path", None)
                         if event_log and isinstance(event_log, Path) and event_log.exists():
-                            trajectories = load_trajectories(event_log, limit=200)
+                            trajectories = await asyncio.to_thread(
+                                load_trajectories, event_log, limit=200
+                            )
                             if trajectories:
-                                patterns = self._skill_learner.mine(trajectories)
+                                patterns = await asyncio.to_thread(
+                                    self._skill_learner.mine, trajectories
+                                )
                                 if patterns:
-                                    sl_result = self._skill_learner.generate(patterns)
+                                    sl_result = await asyncio.to_thread(
+                                        self._skill_learner.generate, patterns
+                                    )
                                     if sl_result.skills_created or sl_result.skills_updated:
                                         if self._memory_coordinator is not None:
                                             self._memory_coordinator.canonical_changed(

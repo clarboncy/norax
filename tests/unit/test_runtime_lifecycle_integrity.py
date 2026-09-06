@@ -242,6 +242,72 @@ async def test_completed_turn_tasks_are_released_and_cancel_reports_real_work() 
     assert "inactive-window" not in runtime._stop_channels
 
 
+@pytest.mark.asyncio
+async def test_cancelled_prestart_worker_releases_pending_capacity() -> None:
+    runtime = _runtime()
+    assert runtime._queue_turn("one", _env("first", channel_id="one"))
+    worker = runtime._active_turn_tasks["one"]
+    worker.cancel()
+    await asyncio.gather(worker, return_exceptions=True)
+
+    assert runtime._turn_work_count == 0
+    assert not runtime._turn_queues
+    assert not runtime._active_turn_tasks
+
+
+@pytest.mark.asyncio
+async def test_draining_runtime_rejects_new_turns() -> None:
+    runtime = _runtime()
+    runtime._draining = True
+    accepted = runtime._queue_turn("one", _env("late", channel_id="one"))
+    await asyncio.gather(*runtime._active_turn_tasks.values(), return_exceptions=True)
+
+    assert accepted is False
+    assert runtime._turn_work_count == 0
+    assert not runtime._turn_queues
+
+
+@pytest.mark.asyncio
+async def test_old_cancelled_worker_cannot_detach_replacement_queue() -> None:
+    runtime = _runtime()
+    old_started = asyncio.Event()
+    new_started = asyncio.Event()
+    release_old = asyncio.Event()
+    release_new = asyncio.Event()
+    delivered: list[str] = []
+
+    async def controlled_inner(self: Runtime, env: SensoryInput) -> None:
+        if env.body == "old":
+            old_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                await release_old.wait()
+                raise
+        if env.body == "new":
+            new_started.set()
+            await release_new.wait()
+        delivered.append(env.body)
+
+    runtime._handle_turn_inner = MethodType(controlled_inner, runtime)  # type: ignore[method-assign]
+    assert runtime._queue_turn("one", _env("old", channel_id="one"))
+    await asyncio.wait_for(old_started.wait(), timeout=1)
+    old_worker = runtime._active_turn_tasks["one"]
+    assert runtime._cancel_channel("one")
+    assert runtime._queue_turn("one", _env("new", channel_id="one"))
+    await asyncio.wait_for(new_started.wait(), timeout=1)
+    new_worker = runtime._active_turn_tasks["one"]
+    release_old.set()
+    await asyncio.gather(old_worker, return_exceptions=True)
+    assert runtime._queue_turn("one", _env("following", channel_id="one"))
+    release_new.set()
+    await asyncio.wait_for(new_worker, timeout=1)
+
+    assert delivered == ["new", "following"]
+    assert runtime._turn_work_count == 0
+    assert not runtime._turn_queues
+
+
 class _SequenceIngress(_IdleIngress):
     def __init__(self, messages: list[SensoryInput]) -> None:
         super().__init__()

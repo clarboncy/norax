@@ -592,6 +592,72 @@ class _Discord:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("streamed", [False, True])
+async def test_empty_response_diagnostic_never_sends_raw_provider_data(tmp_path, streamed):
+    runtime = _runtime(tmp_path)
+    stream = _StreamingMessage() if streamed else None
+    response = GatewayResponse(
+        request_id="empty",
+        model="test-model",
+        content="",
+        tool_calls=[],
+        usage={},
+        raw={"private_provider_metadata": "private-value-must-not-be-delivered"},
+    )
+    try:
+        result = await runtime._deliver_turn_response(
+            env=_env(),
+            ctx=SimpleNamespace(decision="emit_reply"),
+            resp=response,
+            trace=[],
+            rounds=1,
+            streaming_msg=stream,
+            stream_delta_buf=[],
+            target_channel="thread-1",
+        )
+        messages = stream.finalized if stream else [row[2] for row in runtime.outbound.sent]
+        assert result["ok"] is True
+        assert messages
+        assert all("private-value-must-not-be-delivered" not in message for message in messages)
+    finally:
+        await runtime.gateway.aclose()
+
+
+@pytest.mark.asyncio
+async def test_generation_metrics_failure_cannot_prevent_reply_delivery(tmp_path):
+    runtime = _runtime(tmp_path)
+
+    class BrokenMetric:
+        def labels(self, **kwargs):
+            raise RuntimeError("metrics backend unavailable")
+
+    runtime.metrics.gateway_requests = BrokenMetric()
+    response = GatewayResponse(
+        request_id="metrics",
+        model="test-model",
+        content="completed answer",
+        tool_calls=[],
+        usage={},
+        raw={},
+    )
+    try:
+        result = await runtime._deliver_turn_response(
+            env=_env(),
+            ctx=SimpleNamespace(decision="emit_reply"),
+            resp=response,
+            trace=[],
+            rounds=1,
+            streaming_msg=None,
+            stream_delta_buf=[],
+            target_channel="thread-1",
+        )
+        assert result["ok"] is True
+        assert runtime.outbound.sent[0][2] == "completed answer"
+    finally:
+        await runtime.gateway.aclose()
+
+
+@pytest.mark.asyncio
 async def test_turn_pipeline_streams_and_finalizes_exactly_once(tmp_path, monkeypatch) -> None:
     runtime = _runtime(tmp_path)
     runtime.discord = _Discord()  # type: ignore[assignment]

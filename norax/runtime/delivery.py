@@ -99,19 +99,23 @@ class DeliveryMixin(RuntimeAccessMixin):
     ) -> dict[str, Any]:
         """Deliver a completed response and return explicit delivery evidence."""
         usage = resp.usage or {}
-        in_tok = int(usage.get("input_tokens") or 0)
-        out_tok = int(usage.get("output_tokens") or 0)
-        if in_tok:
-            self.metrics.gateway_tokens_in.labels(model=resp.model or self.default_model).inc(
-                in_tok
-            )
-        if out_tok:
-            self.metrics.gateway_tokens_out.labels(model=resp.model or self.default_model).inc(
-                out_tok
-            )
-        self.metrics.gateway_requests.labels(
-            model=resp.model or self.default_model, status="ok"
-        ).inc()
+        in_tok = out_tok = 0
+        try:
+            in_tok = max(0, int(usage.get("input_tokens") or 0))
+            out_tok = max(0, int(usage.get("output_tokens") or 0))
+            if in_tok:
+                self.metrics.gateway_tokens_in.labels(model=resp.model or self.default_model).inc(
+                    in_tok
+                )
+            if out_tok:
+                self.metrics.gateway_tokens_out.labels(model=resp.model or self.default_model).inc(
+                    out_tok
+                )
+            self.metrics.gateway_requests.labels(
+                model=resp.model or self.default_model, status="ok"
+            ).inc()
+        except Exception:  # noqa: BLE001 - telemetry must not prevent delivery
+            log.warning("gateway.delivery_metric_record_failed", exc_info=True)
 
         content = (resp.content or "").strip()
         delivery: dict[str, Any]
@@ -137,16 +141,14 @@ class DeliveryMixin(RuntimeAccessMixin):
                     final_text = (
                         f"⚠️ Empty upstream response [{resp.model}] "
                         f"rounds={rounds} tool_calls={len(trace)} "
-                        f"streamed_chars={sum(len(x) for x in stream_delta_buf)} "
-                        f"usage={resp.usage} raw={str(resp.raw)[:1000]}"
+                        f"streamed_chars={sum(len(x) for x in stream_delta_buf)}"
                     )
                     reply_to = env.message_id
                 elif content == "." and (resp.model or "").startswith("gemma"):
                     final_text = (
                         f"⚠️ Suspicious single-dot upstream response [{resp.model}] "
                         f"rounds={rounds} tool_calls={len(trace)} "
-                        f"streamed_chars={sum(len(x) for x in stream_delta_buf)} "
-                        f"usage={resp.usage} raw={str(resp.raw)[:1000]}"
+                        f"streamed_chars={sum(len(x) for x in stream_delta_buf)}"
                     )
                     reply_to = env.message_id
                 else:
@@ -240,10 +242,7 @@ class DeliveryMixin(RuntimeAccessMixin):
             return {"ok": True, "state": "not_requested", "attempted": False}
         content = (resp.content or "").strip()
         if not content:
-            content = (
-                f"⚠️ Empty upstream response [{resp.model}] "
-                f"usage={resp.usage} raw={str(resp.raw)[:1000]}"
-            )
+            content = f"⚠️ Empty upstream response [{resp.model}]. Please try again."
         if content in ("NO_REPLY", "HEARTBEAT_OK"):
             return {
                 "ok": True,

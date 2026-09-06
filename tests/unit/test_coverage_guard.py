@@ -193,7 +193,8 @@ def test_default_critical_policy_covers_runtime_and_external_protocol_boundaries
     assert runtime_boundaries <= critical.keys()
     assert critical["norax/runtime/core.py"] == (70.0, 48.0)
     assert critical["norax/runtime/turn_pipeline.py"] == (48.0, 34.0)
-    assert critical["norax/runtime/lifecycle.py"] == (70.0, 65.0)
+    assert critical["norax/runtime/lifecycle.py"] == (74.0, 71.0)
+    assert critical["norax/observability/log.py"] == (80.0, 62.0)
     assert "norax/gateway_client/__init__.py" in critical
     assert "norax/mcp/server.py" in critical
     assert "norax/a2a/server.py" in critical

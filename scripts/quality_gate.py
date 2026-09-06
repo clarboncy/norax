@@ -111,7 +111,7 @@ def main() -> int:
     # it explicitly. The repository may contain legacy/dev event fixtures that
     # are intentionally outside the active service's chain.
     configured_state_dir = os.environ.get("NORAX_VERIFY_STATE_DIR")
-    if configured_state_dir and (Path(configured_state_dir) / "events.jsonl").exists():
+    if configured_state_dir:
         events_file = Path(configured_state_dir) / "events.jsonl"
         checks.append(
             [

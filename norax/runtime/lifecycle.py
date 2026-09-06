@@ -41,9 +41,14 @@ class LifecycleMixin(RuntimeAccessMixin):
         def _finished(completed: asyncio.Task[Any]) -> None:
             if self._active_turn_tasks.get(channel_id) is completed:
                 self._active_turn_tasks.pop(channel_id, None)
-            queue = self._turn_queues.get(channel_id)
-            if queue is not None and not queue:
-                self._turn_queues.pop(channel_id, None)
+                # A task cancelled before its coroutine starts never executes
+                # the worker's finally block. Release its queued capacity here.
+                # An older task must never clean up a replacement's queue.
+                queue = self._turn_queues.pop(channel_id, None)
+                if queue:
+                    self._turn_work_count = max(0, self._turn_work_count - len(queue))
+                    queue.clear()
+                self._stop_channels.discard(channel_id)
             if completed.cancelled():
                 return
             error = completed.exception()
@@ -59,6 +64,8 @@ class LifecycleMixin(RuntimeAccessMixin):
 
     def _queue_turn(self, channel_id: str, env: Any) -> bool:
         """Queue one turn without ever blocking the global ingress consumer."""
+        if self._draining:
+            return False
         queue = self._turn_queues.setdefault(channel_id, deque())
         worker = self._active_turn_tasks.get(channel_id)
         channel_work = len(queue) + int(worker is not None and not worker.done())
