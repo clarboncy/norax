@@ -16,6 +16,7 @@ implementation before the fix was applied.
 | Event persistence | Another writer's append left the rotation anchor stale. Missing/truncated current data could restart a chain or concatenate JSON records. An empty file could produce an empty rotation. | Startup and append share a process lock; rotation reads the actual tail; lost history and unterminated records fail explicitly without rewriting evidence; empty files do not rotate. |
 | Response delivery | Metrics exceptions could prevent an already generated answer from being delivered. Empty-response diagnostics exposed raw provider metadata. | Delivery tolerates metrics failure and diagnostic replies omit raw provider data. |
 | Idle maintenance | Long user turns could trigger maintenance. No spill files prevented independent pruning and projection synchronization. Skill file work blocked the serving loop. | Active/queued work defers maintenance; spill consolidation no longer gates unrelated maintenance; skill loading/mining/generation use worker threads. |
+| Provider transactions | Cancelling a caller during a store write left persisted settings updated while the live route remained unchanged. | The runtime owns and shields complete update/disable/remove transactions from caller cancellation, tracks them for shutdown, and rejects new mutations during draining. Existing rollback and client retirement semantics are preserved. |
 | Burn-in evidence | Missing/duplicate timestamps, long collection gaps, stale samples, absent counters, and invalid latency could produce a passing assessment. Overlapping collectors lost samples. | Require ordered observations across the actual 72-hour window, at most 180 seconds between observations, finite counters/latencies and explicit metrics availability. Serialize collection and campaign archival with a process lock. |
 | Release gate | An explicitly selected but missing event log was silently skipped. | Always invoke verification for an explicitly selected log; absence fails the gate. |
 
@@ -24,9 +25,9 @@ not fabricate replacement hashes or erase records to produce a green report.
 
 ## Verification
 
-- Full source gate: 1,732 main tests and three subprocess acceptance tests
+- Full source gate: 1,736 main tests and three subprocess acceptance tests
   passed. Ten interactive host tests remain excluded from unattended runs.
-- Coverage: 73.94% statements, 61.15% branches, 70.57% combined. Coverage
+- Coverage: 73.98% statements, 61.18% branches, 70.61% combined. Coverage
   still leaves untested behavior; it is not an exhaustive correctness claim.
 - 28 critical modules are gated. Event persistence now has an explicit
   floor; delivery, lifecycle, and cognition floors were raised. Cognition
@@ -42,8 +43,11 @@ not fabricate replacement hashes or erase records to produce a green report.
   cloud `glm-5.3:cloud` passed in 4.855 s. Both completed read, exact edit,
   readback, and artifact verification in four rounds. Private receipts are
   retained under `benchmarks/runs/` and excluded from publication.
-- Both running agents passed operational checks with unchanged process
-  identities and zero automatic restarts. Selected active memory lint passed.
+- Both running agents passed initial operational checks with unchanged process
+  identities and zero automatic restarts. A later secondary service activation
+  was observed before the source synchronization; no runtime restart commands
+  were issued during this follow-up. Both final operational checks passed.
+  Selected active memory lint passed.
   The primary deployment's selected event generations verified 73,099/73,099
   records; the secondary deployment's selected active chain verified 3/3.
 

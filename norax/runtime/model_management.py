@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from collections.abc import Coroutine
+from typing import Any, TypeVar
 
 from .. import commands as cmd_mod
 from ..brain import agent_loop
@@ -18,6 +19,7 @@ log = logging.getLogger("norax.runtime.core")
 
 _MAX_PROVIDER_DISCOVERY_BYTES = 2 * 1024 * 1024
 _MAX_PROVIDER_DISCOVERY_MODELS = 100
+_MutationResult = TypeVar("_MutationResult")
 
 
 class ModelManagementMixin(RuntimeAccessMixin):
@@ -33,6 +35,35 @@ class ModelManagementMixin(RuntimeAccessMixin):
     thinking_effort: str
     tool_activity: str
     weak_model_boost: str
+
+    async def _run_provider_mutation(
+        self, operation: Coroutine[Any, Any, _MutationResult]
+    ) -> _MutationResult:
+        """Own the full transaction even when its HTTP caller disconnects.
+
+        Cancelling an awaiting coroutine cannot stop an in-flight filesystem
+        write in a worker thread. Keep the store and live route transaction
+        together under runtime ownership until it commits or rolls back.
+        """
+        if getattr(self, "_draining", False):
+            operation.close()
+            raise RuntimeError("runtime is draining; provider changes are unavailable")
+        task = asyncio.create_task(operation, name="provider-mutation")
+        tasks = getattr(self, "_maintenance_tasks", None)
+        if tasks is None:
+            tasks = set()
+            self._maintenance_tasks = tasks
+        tasks.add(task)
+
+        def finished(completed: asyncio.Task[_MutationResult]) -> None:
+            tasks.discard(completed)
+            if not completed.cancelled():
+                error = completed.exception()
+                if error is not None:
+                    log.warning("provider mutation failed: %s", type(error).__name__)
+
+        task.add_done_callback(finished)
+        return await asyncio.shield(task)
 
     def custom_model_catalog(self) -> dict[str, list[tuple[str, str]]]:
         catalog: dict[str, list[tuple[str, str]]] = {}
@@ -100,6 +131,9 @@ class ModelManagementMixin(RuntimeAccessMixin):
         )
 
     async def upsert_custom_provider(self, spec: dict[str, Any]) -> dict[str, Any]:
+        return await self._run_provider_mutation(self._upsert_custom_provider(spec))
+
+    async def _upsert_custom_provider(self, spec: dict[str, Any]) -> dict[str, Any]:
         from ..config.provider_store import validate_provider_api_key, validate_provider_spec
 
         if not isinstance(spec, dict):
@@ -209,6 +243,9 @@ class ModelManagementMixin(RuntimeAccessMixin):
             return clean
 
     async def remove_custom_provider(self, name: str) -> bool:
+        return await self._run_provider_mutation(self._remove_custom_provider(name))
+
+    async def _remove_custom_provider(self, name: str) -> bool:
         try:
             clean_name = _provider_identifier(name)
         except ValueError:

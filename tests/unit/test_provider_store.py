@@ -339,6 +339,83 @@ async def test_runtime_provider_update_is_live_persisted_and_event_failure_is_no
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mutation", ["upsert", "disable", "remove"])
+@respx.mock
+async def test_provider_update_finishes_consistently_after_request_cancellation(
+    tmp_path, monkeypatch, mutation
+):
+    import threading
+
+    if mutation == "upsert":
+        respx.get("https://api.example.com/v1/models").mock(
+            return_value=httpx.Response(200, json={"data": [{"id": "model-a"}]})
+        )
+    router = GatewayRouter({"default": _FakeGateway("http://default")}, [], "default")
+    runtime = _provider_runtime(tmp_path, router)
+    provider = {"name": "example", "base_url": "https://api.example.com/v1", "models": ["model-a"]}
+    if mutation != "upsert":
+        runtime._provider_store.upsert(provider, "secret")
+        await router.upsert_provider("example", _FakeGateway("https://api.example.com/v1"))
+    stored = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+    store_method = "remove" if mutation == "remove" else "upsert"
+    original = getattr(runtime._provider_store, store_method)
+
+    def slow_store(*args, **kwargs):
+        result = original(*args, **kwargs)
+        stored.set()
+        try:
+            assert release.wait(timeout=3)
+            return result
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(runtime._provider_store, store_method, slow_store)
+    caller = asyncio.create_task(
+        runtime.remove_custom_provider("example")
+        if mutation == "remove"
+        else runtime.upsert_custom_provider({**provider, "enabled": mutation != "disable"})
+    )
+    try:
+        assert await asyncio.to_thread(stored.wait, 2)
+        caller.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await caller
+        release.set()
+        assert await asyncio.to_thread(finished.wait, 2)
+        await asyncio.gather(*getattr(runtime, "_maintenance_tasks", set()))
+
+        rows = runtime._provider_store.list_public()
+        if mutation == "remove":
+            assert rows == []
+        else:
+            assert rows[0]["name"] == "example"
+            assert rows[0]["enabled"] is (mutation == "upsert")
+        assert router.has_provider("example") is (mutation == "upsert")
+    finally:
+        release.set()
+        await asyncio.gather(caller, return_exceptions=True)
+        await router.aclose()
+
+
+@pytest.mark.asyncio
+async def test_provider_mutations_are_rejected_during_shutdown(tmp_path):
+    router = GatewayRouter({"default": _FakeGateway("http://default")}, [], "default")
+    runtime = _provider_runtime(tmp_path, router)
+    runtime._draining = True
+    try:
+        with pytest.raises(RuntimeError, match="draining"):
+            await runtime.upsert_custom_provider({"name": "example"})
+        with pytest.raises(RuntimeError, match="draining"):
+            await runtime.remove_custom_provider("example")
+        assert runtime._provider_store.list_public() == []
+        assert not getattr(runtime, "_maintenance_tasks", set())
+    finally:
+        await router.aclose()
+
+
+@pytest.mark.asyncio
 @respx.mock
 async def test_runtime_provider_revalidates_discovered_model_ids_before_commit(tmp_path):
     respx.get("https://api.example.com/v1/models").mock(
