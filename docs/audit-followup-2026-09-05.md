@@ -1,7 +1,8 @@
 # Continued audit and remaining release acceptance
 
-Status: source fixes verified; activation of the updated runtime and the
-72-hour reliability observation remain pending. Passing engineering checks
+Status: source fixes verified and runtime revision `d23e4902decb` activated
+in both deployments on 2026-09-06 UTC. The 72-hour reliability observation
+is collecting; it has not passed yet. Passing engineering checks
 does not establish comparative superiority or correctness of every possible
 configuration.
 
@@ -19,13 +20,14 @@ implementation before the fix was applied.
 | Provider transactions | Cancelling a caller during a store write left persisted settings updated while the live route remained unchanged. | The runtime owns and shields complete update/disable/remove transactions from caller cancellation, tracks them for shutdown, and rejects new mutations during draining. Existing rollback and client retirement semantics are preserved. |
 | Burn-in evidence | Missing/duplicate timestamps, long collection gaps, stale samples, absent counters, and invalid latency could produce a passing assessment. Overlapping collectors lost samples. | Require ordered observations across the actual 72-hour window, at most 180 seconds between observations, finite counters/latencies and explicit metrics availability. Serialize collection and campaign archival with a process lock. |
 | Release gate | An explicitly selected but missing event log was silently skipped. | Always invoke verification for an explicitly selected log; absence fails the gate. |
+| Shell validation gate | A single `bash -n` invocation with multiple script paths parsed only the first file, accepting broken later scripts. | Validate each of the nine shell scripts separately. Regression tests demonstrate rejection of an invalid second helper and an invalid setup script without executing either. |
 
 Existing damaged historical logs are preserved. The persistence changes do
 not fabricate replacement hashes or erase records to produce a green report.
 
 ## Verification
 
-- Full source gate: 1,736 main tests and three subprocess acceptance tests
+- Full source gate: 1,738 main tests and three subprocess acceptance tests
   passed. Ten interactive host tests remain excluded from unattended runs.
 - Coverage: 73.98% statements, 61.18% branches, 70.61% combined. Coverage
   still leaves untested behavior; it is not an exhaustive correctness claim.
@@ -51,21 +53,57 @@ not fabricate replacement hashes or erase records to produce a green report.
   The primary deployment's selected event generations verified 73,099/73,099
   records; the secondary deployment's selected active chain verified 3/3.
 
+## Approved activation and live validation
+
+- Both services were restarted sequentially, with primary readiness verified
+  before restarting the secondary. Both report runtime build `d23e4902decb`,
+  healthy listeners, connected Discord adapters, verified model completions,
+  new service invocation identities, and zero automatic restarts.
+- Private environment and secondary runtime-settings/configuration checksums
+  were unchanged across the restarts. No memories or credentials were copied
+  between deployments. Unrelated services were not restarted.
+- Each deployment passed the confined execution harness in six model rounds:
+  create a three-line artifact, read two distinct pages, verify an expected
+  no-match search, run a fixed command, and report the exact completion marker.
+  This uses a separate harness process; it is not a live Discord delivery test.
+  The first secondary invocation used the shell's default configuration and
+  failed to connect. Repeating with that service's actual environment passed.
+  Deployment acceptance must select the deployed configuration and environment,
+  not assume an SSH shell inherits systemd environment overrides.
+- Active memory lint and stack checks passed in both deployments. Selected
+  event generations verified 73,136/73,136 primary and 5/5 secondary records,
+  with no corruption. Older inactive archives remain untouched.
+- Each deployment passed 40 read-only HTTP checks at concurrency four,
+  covering readiness/status and unauthorized access rejection for provider
+  configuration and owner history. Maximum observed local-listener request
+  time was 5.6 ms primary and 78.9 ms secondary. This is a small control-plane
+  smoke test, not a generation-throughput or sustained-load benchmark.
+- An additional confined cloud `glm-5.3:cloud` write/read task passed exact
+  random-content and artifact verification in three rounds, taking 32.504 s.
+  Model response time varies; the earlier faster edit task is not representative
+  proof of consistently low cloud latency.
+- Both corrected campaigns, `activated-d23e490-20260906`, started around
+  02:03 UTC on September 6. Earlier evidence was archived intact. Their timers
+  are adding observations with explicit metrics, clean event chains, zero
+  error deltas, stable service identities, and successful completion probes.
+  Earliest possible 72-hour acceptance is around 02:03 UTC on September 9,
+  subject to the actual observations and all gates passing.
+- The subsequent shell-gate correction changes only validation code and tests;
+  no further runtime restart is needed to use it.
+
 ## Remaining acceptance work
 
-1. Activate the updated runtime in each deployment during an approved restart,
-   then verify listeners, delivery, model routes, selected data roots, and
-   service identity against the activated revision.
-2. Gather 72 hours of uninterrupted evidence using the corrected collector.
+1. Gather 72 hours of uninterrupted evidence using the corrected collector.
    Older samples lack the new explicit metrics-availability field and cannot
    be retroactively treated as equivalent evidence. Archive prior campaigns
    intact when starting the corrected campaign.
-3. Broaden representative tasks across configured providers and connectors.
-   Two passing model tasks do not validate every installable local or cloud
+2. Broaden representative tasks across configured providers and connectors,
+   including actual end-to-end connector delivery and sustained concurrent use.
+   These passing model tasks do not validate every installable local or cloud
    model, every connector, or prolonged concurrent use.
-4. Continue focused testing of less-covered turn, provider, cognition, and
+3. Continue focused testing of less-covered turn, provider, cognition, and
    recovery branches. Current coverage percentages explicitly leave gaps.
-5. Any comparative performance claim requires a matched, repeatable external
+4. Any comparative performance claim requires a matched, repeatable external
    evaluation. No competitive ranking is asserted by this audit.
 
 The audit remains open until the applicable deployment acceptance evidence is

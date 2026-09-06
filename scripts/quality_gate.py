@@ -73,7 +73,9 @@ def main() -> int:
     checks = [
         [uv, "lock", "--check"],
         [systemd_analyze, "--user", "verify", *systemd_units],
-        [bash, "-n", *shell_scripts],
+        # Bash parses only its first script operand; later paths become $@.
+        # Validate each helper separately so an invalid later file fails.
+        *[[bash, "-n", script] for script in shell_scripts],
         [ruff, "check", *STATIC_ROOTS],
         [ruff, "format", "--check", *STATIC_ROOTS],
         [mypy, "norax", "agent_os", "tools"],
