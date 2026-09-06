@@ -55,6 +55,9 @@ def test_selected_missing_event_log_is_still_verified(tmp_path, monkeypatch):
     gate = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(gate)
     selected = tmp_path / "missing-state"
+    # Execution is mocked below; command construction must not depend on the
+    # developer shell having every gate executable on PATH.
+    monkeypatch.setattr(gate.shutil, "which", lambda name: name)
     monkeypatch.setenv("NORAX_VERIFY_STATE_DIR", str(selected))
     monkeypatch.delenv("NORAX_VERIFY_MEMORY_ROOT", raising=False)
     monkeypatch.delenv("NORAX_QUALITY_GATE_CONTINUE", raising=False)
