@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import copy
+import json
 from typing import Any
 
 import httpx
@@ -79,6 +80,44 @@ async def test_unrelated_openai_endpoint_is_not_treated_as_llama_cpp(base_url) -
         await gateway.aclose()
 
     assert payload == {"reasoning_effort": "medium"}
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize(
+    ("effort", "expected"), [("none", False), ("off", False), ("medium", "medium")]
+)
+async def test_native_relay_preserves_effort_through_final_serialization(stream, effort, expected):
+    model = "qwen3.8-27b-fast:latest"
+    response = {
+        "model": model,
+        "message": {"role": "assistant", "content": "OK"},
+        "done": True,
+        "done_reason": "stop",
+    }
+    route = respx.post("http://relay.test:19136/api/chat").mock(
+        return_value=httpx.Response(200, text=json.dumps(response) + "\n")
+    )
+    gateway = GatewayClient(base_url="http://relay.test:19136/v1", provider_kind="ollama")
+    request = GatewayRequest(
+        model=model,
+        messages=[{"role": "user", "content": "Reply OK"}],
+        max_tokens=32,
+        metadata={"reasoning_effort": effort},
+    )
+    try:
+        if stream:
+            events = [event async for event in gateway.chat_stream(request)]
+            assert events[-1].kind == "final"
+        else:
+            assert (await gateway.chat(request)).content == "OK"
+    finally:
+        await gateway.aclose()
+    payload = json.loads(route.calls[0].request.content)
+    assert payload["think"] == expected
+    assert payload["options"]["num_predict"] == 32
+    assert "chat_template_kwargs" not in payload
 
 
 class _RouterClient:

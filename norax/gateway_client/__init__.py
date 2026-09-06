@@ -887,7 +887,10 @@ class GatewayClient:
 
     def _apply_llama_cpp_thinking(self, payload: dict[str, Any], effort: object) -> None:
         """Translate Norax effort names to Qwen's llama.cpp template controls."""
-        if not self._is_llama_cpp_endpoint() or effort is None:
+        # A relay may expose both transports. Native Ollama still needs the
+        # effort field so its converter can build `think`; mapping it here
+        # discarded the off switch before /api/chat was serialized.
+        if self._provider_kind() == "ollama" or not self._is_llama_cpp_endpoint() or effort is None:
             return
         normalized = str(effort).strip().lower()
         kwargs = payload.setdefault("chat_template_kwargs", {})

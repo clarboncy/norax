@@ -545,7 +545,14 @@ def key_press(key: str) -> dict:
     space, Up/Down/Left/Right, ctrl+a, ctrl+c, ctrl+v, ctrl+s, ctrl+z, ctrl+l,
     alt+Tab, alt+F4, and single letters/numbers.
     """
-    if not key or len(key) > 128 or not all(c.isalnum() or c in "_+-" for c in key):
+    parts = key.split("+") if isinstance(key, str) else []
+    if (
+        not parts
+        or len(key) > 128
+        or len(parts) > 8
+        or any(not part or part.startswith("-") for part in parts)
+        or not all(c.isalnum() or c in "_+-" for c in key)
+    ):
         return {
             "ok": False,
             "key": key,
@@ -555,14 +562,6 @@ def key_press(key: str) -> dict:
     if _is_wayland():
         # Handle combos like "ctrl+c"
         if "+" in key:
-            parts = key.split("+")
-            if len(parts) > 8 or any(not part for part in parts):
-                return {
-                    "ok": False,
-                    "key": key,
-                    "mode": "wayland",
-                    "error": "invalid key combination",
-                }
             codes = []
             for part in parts:
                 code = _yd_keycode(part)

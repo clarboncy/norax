@@ -30,6 +30,13 @@ No new comparative benchmarks were run during this final audit pass.
   prefix-cache reuse for direct and relay endpoints. Endpoint detection parses
   the actual URL port; a cloud URL path or query cannot accidentally select
   local-only options. Streaming and nonstreaming paths are covered.
+- Native Ollama requests through a dual-protocol relay retain their effort
+  field until native serialization. The OpenAI template mapper must not consume
+  it first; otherwise `none` becomes default thinking and a small liveness
+  request can spend its entire allowance without producing visible output.
+- Desktop key validation rejects option-like arguments and malformed
+  combinations before either backend runs. An X11 helper printing `--help`
+  and exiting zero must not be reported as a successful key press.
 - Web fetching uses direct HTTP first and an optional configured rendering
   fallback. Unconfigured fallback, sufficient direct results, and deliberately
   short excerpts add no fallback calls or disclosure checks. External response
@@ -47,9 +54,9 @@ No new comparative benchmarks were run during this final audit pass.
 
 `scripts/quality_gate.py` passed on this source:
 
-- 1,779 tests in the branch-coverage run, plus three isolated subprocess
+- 1,793 tests in the branch-coverage run, plus three isolated subprocess
   acceptance tests; 10 desktop-affecting host tests were intentionally excluded.
-- 74.06% statement coverage, 61.28% branch coverage, 70.69% combined coverage;
+- 74.08% statement coverage, 61.33% branch coverage, 70.72% combined coverage;
   all 28 critical-module floors passed without lowering thresholds.
 - Lockfile, systemd units, every shell helper, Ruff lint/format, mypy,
   compilation, stack boundaries, publication hygiene, and secret scanning.
@@ -63,15 +70,34 @@ secondary's verified 28 records, with zero corrupt records. These are point-in-
 time checks; ordinary live operation continues appending events.
 
 The separate development site's restored commerce import and configured chat
-router passed five offline regression tests, including rejection of provider
-failures as successful responses. Its unrelated local changes are preserved.
+router passed seven offline regression tests, including rejection of provider
+failures as successful responses, authenticated page aliases, and fail-closed
+startup without a configured password. Its unrelated local changes are preserved.
 
 ## Deployment and evidence boundaries
 
 Deploy code with a fast-forward source update, never by copying a primary
 environment or memory directory to the secondary. Check private configuration
-digests before/after, restart sequentially, and verify readiness plus a real
-owner-bridge response on each running deployment.
+digests before/after, restart sequentially, and verify readiness plus the
+deployment's configured connector. The primary passed a real owner-bridge
+response check without sending an external Discord message. The secondary's
+optional owner bridge is not configured and was not silently enabled; its
+running completion probe and Discord connection were verified instead.
+
+Live activation exposed an additional private secondary configuration still
+set to 18 rounds. Only that value (now 250) and its relay transport (now the
+relay's direct OpenAI-compatible endpoint) were changed; structural comparison
+verified the rest of that private configuration was unchanged. The old private
+configuration was backed up locally on that deployment.
+
+The development site's public API and admin routes pointed at an unused port.
+They now reach the active authenticated server. Public pricing/downloads return
+HTTP 200, unauthenticated admin/API requests return 401, and the existing login
+successfully opens the admin, hub, and model API through the public hostname.
+The site's existing password and cookie secret were moved to a private,
+mode-0600 service environment without changing them. The inherited site password
+still warrants operator rotation; it was not changed without coordinating
+client access. No credentials were added to public source.
 
 The primary's transport-only probe override was corrected to completion mode
 for activation. The existing 600-second idle-aware schedule and 32-token,

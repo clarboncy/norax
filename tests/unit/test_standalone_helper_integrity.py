@@ -156,6 +156,21 @@ def test_computer_input_validation_and_scroll_failure_are_truthful(helpers, monk
     assert result["reps"] == 0
 
 
+@pytest.mark.parametrize("wayland", [False, True])
+@pytest.mark.parametrize("key", ["--help", "ctrl+--help", "ctrl++a", "ctrl+"])
+def test_invalid_key_combinations_never_reach_either_desktop_backend(
+    helpers, monkeypatch, wayland, key
+):
+    computer = helpers.computer
+    monkeypatch.setattr(computer, "_is_wayland", lambda: wayland)
+
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("invalid key reached a desktop command")
+
+    monkeypatch.setattr(computer, "_run", unexpected)
+    assert computer.key_press(key)["ok"] is False
+
+
 def test_dmap_propagates_input_failure_and_rejects_stale_refs(helpers, monkeypatch, tmp_path):
     dmap = helpers.dmap
     monkeypatch.setattr(dmap, "_ydotool", lambda *_args, **_kwargs: (False, "unavailable"))
