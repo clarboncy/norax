@@ -1,0 +1,1015 @@
+{
+  "schema": "norax.matched_tool_loop_observations.v1",
+  "date_utc": "2026-09-06",
+  "runtime_revisions": {
+    "norax": "2aa07f73e3d91ff3125d1b83387dd4d074dd6268",
+    "hermes": "245e48008fa814b3251f50755eb656bd9fb86cb1"
+  },
+  "measured_runner_sha256": "d918a64c2da96f87364403673d8afcd4e91bc07a1970664c41421b0e15f9b635",
+  "current_runner_sha256": "6ef0c8b69a32e331ac76bc78731e9b0577ea5652aa959335f41bae07c9792cf0",
+  "current_harness_defaults": {
+    "round_limit": 250,
+    "turn_budget_seconds": 14400,
+    "request_timeout_seconds": 600
+  },
+  "controls": {
+    "tasks": [
+      "repair_clamp",
+      "aggregate",
+      "transient_recovery"
+    ],
+    "repetitions": 3,
+    "tools": [
+      "bench_read",
+      "bench_write",
+      "bench_check"
+    ],
+    "requested_round_limit": 8,
+    "requested_turn_budget_seconds": 120,
+    "external_process_deadline_seconds": 150,
+    "max_output_tokens": 4096,
+    "hermes_tool_search": "off",
+    "fresh_memory": true,
+    "alternating_engine_order": true
+  },
+  "limitations": [
+    "Three small task templates, not an industry benchmark or full-product ranking.",
+    "Engine-native prompts, sampling defaults, retries, and request-timeout policies differ.",
+    "Norax request timeout: 60 seconds. Hermes request timeout left at native default; external process deadline applied to both.",
+    "Shared inference backends and warm caches were not controlled; provider contention cannot be separated from engine performance.",
+    "Timing includes per-trial engine initialization; timeout observations remain failures and are included in medians.",
+    "No token-cost, sustained-concurrency, computer-control, or long-horizon comparison was measured.",
+    "First local pilot misconfigured Hermes tool discovery and is excluded as a harness setup failure, not an engine failure.",
+    "The recorded observations predate the 250-round harness default and retain their original 8-round/120-second controls; every passing trial completed within that historical budget."
+  ],
+  "observations": {
+    "local": {
+      "scope": "matched_tool_loop_not_full_agent_ranking",
+      "model": "qwen3.8-27b-fast:latest",
+      "repeats": 3,
+      "summary": {
+        "norax": {
+          "passed": 9,
+          "trials": 9,
+          "median_seconds": 7.403
+        },
+        "hermes": {
+          "passed": 9,
+          "trials": 9,
+          "median_seconds": 9.374
+        }
+      },
+      "trials": [
+        {
+          "engine": "norax",
+          "task": "repair_clamp",
+          "seed": 20260906,
+          "seconds": 8.179,
+          "trace": [
+            {
+              "name": "bench_read",
+              "ok": true
+            },
+            {
+              "name": "bench_write",
+              "ok": true
+            },
+            {
+              "name": "bench_check",
+              "ok": true
+            }
+          ],
+          "artifact_verified": true,
+          "check_observed": true,
+          "final_verified": true,
+          "error": null,
+          "passed": true
+        },
+        {
+          "engine": "hermes",
+          "task": "repair_clamp",
+          "seed": 20260906,
+          "seconds": 10.075,
+          "trace": [
+            {
+              "name": "bench_read",
+              "ok": true
+            },
+            {
+              "name": "bench_write",
+              "ok": true
+            },
+            {
+              "name": "bench_check",
+              "ok": true
+            }
+          ],
+          "artifact_verified": true,
+          "check_observed": true,
+          "final_verified": true,
+          "error": null,
+          "passed": true
+        },
+        {
+          "engine": "norax",
+          "task": "aggregate",
+          "seed": 20260906,
+          "seconds": 8.99,
+          "trace": [
+            {
+              "name": "bench_read",
+              "ok": true
+            },
+            {
+              "name": "bench_write",
+              "ok": true
+            },
+            {
+              "name": "bench_check",
+              "ok": true
+            }
+          ],
+          "artifact_verified": true,
+          "check_observed": true,
+          "final_verified": true,
+          "error": null,
+          "passed": true
+        },
+        {
+          "engine": "hermes",
+          "task": "aggregate",
+          "seed": 20260906,
+          "seconds": 9.511,
+          "trace": [
+            {
+              "name": "bench_read",
+              "ok": true
+            },
+            {
+              "name": "bench_write",
+              "ok": true
+            },
+            {
+              "name": "bench_check",
+              "ok": true
+            }
+          ],
+          "artifact_verified": true,
+          "check_observed": true,
+          "final_verified": true,
+          "error": null,
+          "passed": true
+        },
+        {
+          "engine": "norax",
+          "task": "transient_recovery",
+          "seed": 20260906,
+          "seconds": 6.659,
+          "trace": [
+            {
+              "name": "bench_read",
+              "ok": false
+            },
+            {
+              "name": "bench_read",
+              "ok": true
+            },
+            {
+              "name": "bench_write",
+              "ok": true
+            },
+            {
+              "name": "bench_check",
+              "ok": true
+            }
+          ],
+          "artifact_verified": true,
+          "check_observed": true,
+          "final_verified": true,
+          "error": null,
+          "passed": true
+        },
+        {
+          "engine": "hermes",
+          "task": "transient_recovery",
+          "seed": 20260906,
+          "seconds": 6.622,
+          "trace": [
+            {
+              "name": "bench_read",
+              "ok": false
+            },
+            {
+              "name": "bench_read",
+              "ok": true
+            },
+            {
+              "name": "bench_write",
+              "ok": true
+            },
+            {
+              "name": "bench_check",
+              "ok": true
+            }
+          ],
+          "artifact_verified": true,
+          "check_observed": true,
+          "final_verified": true,
+          "error": null,
+          "passed": true
+        },
+        {
+          "engine": "hermes",
+          "task": "repair_clamp",
+          "seed": 20260907,
+          "seconds": 6.84,
+          "trace": [
+            {
+              "name": "bench_read",
+              "ok": true
+            },
+            {
+              "name": "bench_write",
+              "ok": true
+            },
+            {
+              "name": "bench_check",
+              "ok": true
+            }
+          ],
+          "artifact_verified": true,
+          "check_observed": true,
+          "final_verified": true,
+          "error": null,
+          "passed": true
+        },
+        {
+          "engine": "norax",
+          "task": "repair_clamp",
+          "seed": 20260907,
+          "seconds": 6.483,
+          "trace": [
+            {
+              "name": "bench_read",
+              "ok": true
+            },
+            {
+              "name": "bench_write",
+              "ok": true
+            },
+            {
+              "name": "bench_check",
+              "ok": true
+            }
+          ],
+          "artifact_verified": true,
+          "check_observed": true,
+          "final_verified": true,
+          "error": null,
+          "passed": true
+        },
+        {
+          "engine": "hermes",
+          "task": "aggregate",
+          "seed": 20260907,
+          "seconds": 12.24,
+          "trace": [
+            {
+              "name": "bench_read",
+              "ok": true
+            },
+            {
+              "name": "bench_write",
+              "ok": true
+            },
+            {
+              "name": "bench_check",
+              "ok": true
+            }
+          ],
+          "artifact_verified": true,
+          "check_observed": true,
+          "final_verified": true,
+          "error": null,
+          "passed": true
+        },
+        {
+          "engine": "norax",
+          "task": "aggregate",
+          "seed": 20260907,
+          "seconds": 9.043,
+          "trace": [
+            {
+              "name": "bench_read",
+              "ok": true
+            },
+            {
+              "name": "bench_write",
+              "ok": true
+            },
+            {
+              "name": "bench_check",
+              "ok": true
+            }
+          ],
+          "artifact_verified": true,
+          "check_observed": true,
+          "final_verified": true,
+          "error": null,
+          "passed": true
+        },
+        {
+          "engine": "hermes",
+          "task": "transient_recovery",
+          "seed": 20260907,
+          "seconds": 6.675,
+          "trace": [
+            {
+              "name": "bench_read",
+              "ok": false
+            },
+            {
+              "name": "bench_read",
+              "ok": true
+            },
+            {
+              "name": "bench_write",
+              "ok": true
+            },
+            {
+              "name": "bench_check",
+              "ok": true
+            }
+          ],
+          "artifact_verified": true,
+          "check_observed": true,
+          "final_verified": true,
+          "error": null,
+          "passed": true
+        },
+        {
+          "engine": "norax",
+          "task": "transient_recovery",
+          "seed": 20260907,
+          "seconds": 5.753,
+          "trace": [
+            {
+              "name": "bench_read",
+              "ok": false
+            },
+            {
+              "name": "bench_read",
+              "ok": true
+            },
+            {
+              "name": "bench_write",
+              "ok": true
+            },
+            {
+              "name": "bench_check",
+              "ok": true
+            }
+          ],
+          "artifact_verified": true,
+          "check_observed": true,
+          "final_verified": true,
+          "error": null,
+          "passed": true
+        },
+        {
+          "engine": "norax",
+          "task": "repair_clamp",
+          "seed": 20260908,
+          "seconds": 8.347,
+          "trace": [
+            {
+              "name": "bench_read",
+              "ok": true
+            },
+            {
+              "name": "bench_write",
+              "ok": true
+            },
+            {
+              "name": "bench_check",
+              "ok": true
+            }
+          ],
+          "artifact_verified": true,
+          "check_observed": true,
+          "final_verified": true,
+          "error": null,
+          "passed": true
+        },
+        {
+          "engine": "hermes",
+          "task": "repair_clamp",
+          "seed": 20260908,
+          "seconds": 10.453,
+          "trace": [
+            {
+              "name": "bench_read",
+              "ok": true
+            },
+            {
+              "name": "bench_write",
+              "ok": true
+            },
+            {
+              "name": "bench_check",
+              "ok": true
+            }
+          ],
+          "artifact_verified": true,
+          "check_observed": true,
+          "final_verified": true,
+          "error": null,
+          "passed": true
+        },
+        {
+          "engine": "norax",
+          "task": "aggregate",
+          "seed": 20260908,
+          "seconds": 7.403,
+          "trace": [
+            {
+              "name": "bench_read",
+              "ok": true
+            },
+            {
+              "name": "bench_write",
+              "ok": true
+            },
+            {
+              "name": "bench_check",
+              "ok": true
+            }
+          ],
+          "artifact_verified": true,
+          "check_observed": true,
+          "final_verified": true,
+          "error": null,
+          "passed": true
+        },
+        {
+          "engine": "hermes",
+          "task": "aggregate",
+          "seed": 20260908,
+          "seconds": 9.374,
+          "trace": [
+            {
+              "name": "bench_read",
+              "ok": true
+            },
+            {
+              "name": "bench_write",
+              "ok": true
+            },
+            {
+              "name": "bench_check",
+              "ok": true
+            }
+          ],
+          "artifact_verified": true,
+          "check_observed": true,
+          "final_verified": true,
+          "error": null,
+          "passed": true
+        },
+        {
+          "engine": "norax",
+          "task": "transient_recovery",
+          "seed": 20260908,
+          "seconds": 5.675,
+          "trace": [
+            {
+              "name": "bench_read",
+              "ok": false
+            },
+            {
+              "name": "bench_read",
+              "ok": true
+            },
+            {
+              "name": "bench_write",
+              "ok": true
+            },
+            {
+              "name": "bench_check",
+              "ok": true
+            }
+          ],
+          "artifact_verified": true,
+          "check_observed": true,
+          "final_verified": true,
+          "error": null,
+          "passed": true
+        },
+        {
+          "engine": "hermes",
+          "task": "transient_recovery",
+          "seed": 20260908,
+          "seconds": 7.814,
+          "trace": [
+            {
+              "name": "bench_read",
+              "ok": false
+            },
+            {
+              "name": "bench_read",
+              "ok": true
+            },
+            {
+              "name": "bench_write",
+              "ok": true
+            },
+            {
+              "name": "bench_check",
+              "ok": true
+            }
+          ],
+          "artifact_verified": true,
+          "check_observed": true,
+          "final_verified": true,
+          "error": null,
+          "passed": true
+        }
+      ]
+    },
+    "cloud": {
+      "scope": "matched_tool_loop_not_full_agent_ranking",
+      "model": "glm-5.3:cloud",
+      "repeats": 3,
+      "summary": {
+        "norax": {
+          "passed": 8,
+          "trials": 9,
+          "median_seconds": 6.297
+        },
+        "hermes": {
+          "passed": 8,
+          "trials": 9,
+          "median_seconds": 6.748
+        }
+      },
+      "trials": [
+        {
+          "engine": "norax",
+          "task": "repair_clamp",
+          "seed": 20260906,
+          "seconds": 5.267,
+          "trace": [
+            {
+              "name": "bench_read",
+              "ok": true
+            },
+            {
+              "name": "bench_write",
+              "ok": true
+            },
+            {
+              "name": "bench_check",
+              "ok": true
+            }
+          ],
+          "artifact_verified": true,
+          "check_observed": true,
+          "final_verified": true,
+          "error": null,
+          "passed": true
+        },
+        {
+          "engine": "hermes",
+          "task": "repair_clamp",
+          "seed": 20260906,
+          "seconds": 5.48,
+          "trace": [
+            {
+              "name": "bench_read",
+              "ok": true
+            },
+            {
+              "name": "bench_write",
+              "ok": true
+            },
+            {
+              "name": "bench_check",
+              "ok": true
+            }
+          ],
+          "artifact_verified": true,
+          "check_observed": true,
+          "final_verified": true,
+          "error": null,
+          "passed": true
+        },
+        {
+          "engine": "norax",
+          "task": "aggregate",
+          "seed": 20260906,
+          "seconds": 4.773,
+          "trace": [
+            {
+              "name": "bench_read",
+              "ok": true
+            },
+            {
+              "name": "bench_write",
+              "ok": true
+            },
+            {
+              "name": "bench_check",
+              "ok": true
+            }
+          ],
+          "artifact_verified": true,
+          "check_observed": true,
+          "final_verified": true,
+          "error": null,
+          "passed": true
+        },
+        {
+          "engine": "hermes",
+          "task": "aggregate",
+          "seed": 20260906,
+          "seconds": 7.463,
+          "trace": [
+            {
+              "name": "bench_read",
+              "ok": true
+            },
+            {
+              "name": "bench_write",
+              "ok": true
+            },
+            {
+              "name": "bench_check",
+              "ok": true
+            }
+          ],
+          "artifact_verified": true,
+          "check_observed": true,
+          "final_verified": true,
+          "error": null,
+          "passed": true
+        },
+        {
+          "engine": "norax",
+          "task": "transient_recovery",
+          "seed": 20260906,
+          "seconds": 6.297,
+          "trace": [
+            {
+              "name": "bench_read",
+              "ok": false
+            },
+            {
+              "name": "bench_read",
+              "ok": true
+            },
+            {
+              "name": "bench_write",
+              "ok": true
+            },
+            {
+              "name": "bench_check",
+              "ok": true
+            }
+          ],
+          "artifact_verified": true,
+          "check_observed": true,
+          "final_verified": true,
+          "error": null,
+          "passed": true
+        },
+        {
+          "engine": "hermes",
+          "task": "transient_recovery",
+          "seed": 20260906,
+          "seconds": 6.109,
+          "trace": [
+            {
+              "name": "bench_read",
+              "ok": false
+            },
+            {
+              "name": "bench_read",
+              "ok": true
+            },
+            {
+              "name": "bench_write",
+              "ok": true
+            },
+            {
+              "name": "bench_check",
+              "ok": true
+            }
+          ],
+          "artifact_verified": true,
+          "check_observed": true,
+          "final_verified": true,
+          "error": null,
+          "passed": true
+        },
+        {
+          "engine": "hermes",
+          "task": "repair_clamp",
+          "seed": 20260907,
+          "seconds": 5.868,
+          "trace": [
+            {
+              "name": "bench_read",
+              "ok": true
+            },
+            {
+              "name": "bench_write",
+              "ok": true
+            },
+            {
+              "name": "bench_check",
+              "ok": true
+            }
+          ],
+          "artifact_verified": true,
+          "check_observed": true,
+          "final_verified": true,
+          "error": null,
+          "passed": true
+        },
+        {
+          "engine": "norax",
+          "task": "repair_clamp",
+          "seed": 20260907,
+          "seconds": 5.519,
+          "trace": [
+            {
+              "name": "bench_read",
+              "ok": true
+            },
+            {
+              "name": "bench_write",
+              "ok": true
+            },
+            {
+              "name": "bench_check",
+              "ok": true
+            }
+          ],
+          "artifact_verified": true,
+          "check_observed": true,
+          "final_verified": true,
+          "error": null,
+          "passed": true
+        },
+        {
+          "engine": "hermes",
+          "task": "aggregate",
+          "seed": 20260907,
+          "seconds": 7.487,
+          "trace": [
+            {
+              "name": "bench_read",
+              "ok": true
+            },
+            {
+              "name": "bench_write",
+              "ok": true
+            },
+            {
+              "name": "bench_check",
+              "ok": true
+            }
+          ],
+          "artifact_verified": true,
+          "check_observed": true,
+          "final_verified": true,
+          "error": null,
+          "passed": true
+        },
+        {
+          "engine": "norax",
+          "task": "aggregate",
+          "seed": 20260907,
+          "seconds": 5.679,
+          "trace": [
+            {
+              "name": "bench_read",
+              "ok": true
+            },
+            {
+              "name": "bench_write",
+              "ok": true
+            },
+            {
+              "name": "bench_check",
+              "ok": true
+            }
+          ],
+          "artifact_verified": true,
+          "check_observed": true,
+          "final_verified": true,
+          "error": null,
+          "passed": true
+        },
+        {
+          "engine": "hermes",
+          "task": "transient_recovery",
+          "seed": 20260907,
+          "seconds": 6.286,
+          "trace": [
+            {
+              "name": "bench_read",
+              "ok": false
+            },
+            {
+              "name": "bench_read",
+              "ok": true
+            },
+            {
+              "name": "bench_write",
+              "ok": true
+            },
+            {
+              "name": "bench_check",
+              "ok": true
+            }
+          ],
+          "artifact_verified": true,
+          "check_observed": true,
+          "final_verified": true,
+          "error": null,
+          "passed": true
+        },
+        {
+          "engine": "norax",
+          "task": "transient_recovery",
+          "seed": 20260907,
+          "seconds": 6.973,
+          "trace": [
+            {
+              "name": "bench_read",
+              "ok": false
+            },
+            {
+              "name": "bench_read",
+              "ok": true
+            },
+            {
+              "name": "bench_write",
+              "ok": true
+            },
+            {
+              "name": "bench_check",
+              "ok": true
+            }
+          ],
+          "artifact_verified": true,
+          "check_observed": true,
+          "final_verified": true,
+          "error": null,
+          "passed": true
+        },
+        {
+          "engine": "norax",
+          "task": "repair_clamp",
+          "seed": 20260908,
+          "seconds": 64.21,
+          "trace": [
+            {
+              "name": "bench_read",
+              "ok": true
+            },
+            {
+              "name": "bench_write",
+              "ok": true
+            },
+            {
+              "name": "bench_check",
+              "ok": true
+            }
+          ],
+          "artifact_verified": true,
+          "check_observed": true,
+          "final_verified": false,
+          "error": "ReadTimeout: ",
+          "passed": false
+        },
+        {
+          "engine": "hermes",
+          "task": "repair_clamp",
+          "passed": false,
+          "error": "timeout",
+          "seconds": 150
+        },
+        {
+          "engine": "norax",
+          "task": "aggregate",
+          "seed": 20260908,
+          "seconds": 46.576,
+          "trace": [
+            {
+              "name": "bench_read",
+              "ok": true
+            },
+            {
+              "name": "bench_write",
+              "ok": true
+            },
+            {
+              "name": "bench_check",
+              "ok": true
+            }
+          ],
+          "artifact_verified": true,
+          "check_observed": true,
+          "final_verified": true,
+          "error": null,
+          "passed": true
+        },
+        {
+          "engine": "hermes",
+          "task": "aggregate",
+          "seed": 20260908,
+          "seconds": 7.445,
+          "trace": [
+            {
+              "name": "bench_read",
+              "ok": true
+            },
+            {
+              "name": "bench_write",
+              "ok": true
+            },
+            {
+              "name": "bench_check",
+              "ok": true
+            }
+          ],
+          "artifact_verified": true,
+          "check_observed": true,
+          "final_verified": true,
+          "error": null,
+          "passed": true
+        },
+        {
+          "engine": "norax",
+          "task": "transient_recovery",
+          "seed": 20260908,
+          "seconds": 8.423,
+          "trace": [
+            {
+              "name": "bench_read",
+              "ok": false
+            },
+            {
+              "name": "bench_read",
+              "ok": true
+            },
+            {
+              "name": "bench_write",
+              "ok": true
+            },
+            {
+              "name": "bench_check",
+              "ok": true
+            }
+          ],
+          "artifact_verified": true,
+          "check_observed": true,
+          "final_verified": true,
+          "error": null,
+          "passed": true
+        },
+        {
+          "engine": "hermes",
+          "task": "transient_recovery",
+          "seed": 20260908,
+          "seconds": 6.748,
+          "trace": [
+            {
+              "name": "bench_read",
+              "ok": false
+            },
+            {
+              "name": "bench_read",
+              "ok": true
+            },
+            {
+              "name": "bench_write",
+              "ok": true
+            },
+            {
+              "name": "bench_check",
+              "ok": true
+            }
+          ],
+          "artifact_verified": true,
+          "check_observed": true,
+          "final_verified": true,
+          "error": null,
+          "passed": true
+        }
+      ]
+    }
+  }
+}

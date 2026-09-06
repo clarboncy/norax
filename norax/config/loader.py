@@ -1146,8 +1146,8 @@ class Config:
         configured = os.environ.get("NORAX_MAX_TOOL_ROUNDS")
         runtime = self._section("runtime")
         file_value = _config_int(
-            runtime.get("max_tool_rounds", 8),
-            default=8,
+            runtime.get("max_tool_rounds", 250),
+            default=250,
             minimum=0,
             label="runtime.max_tool_rounds",
         )

@@ -444,7 +444,11 @@ async def test_output_revision_that_is_not_better_is_rejected():
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_loop_single_tool_then_final(tmp_path):
+@pytest.mark.parametrize(
+    "final_text",
+    ["Read: hello world", "Read-back succeeded. Deployment still needs operator approval.\nDONE"],
+)
+async def test_loop_single_tool_then_final(tmp_path, final_text):
     # Create a file for `read` to succeed.
     import os
 
@@ -460,7 +464,7 @@ async def test_loop_single_tool_then_final(tmp_path):
     respx.post("http://stub/v1/chat/completions").mock(
         side_effect=[
             httpx.Response(200, json=_openai_response(tool_calls=[tool_call])),
-            httpx.Response(200, json=_openai_response(content="Read: hello world")),
+            httpx.Response(200, json=_openai_response(content=final_text)),
         ]
     )
     gw = GatewayClient(base_url="http://stub/v1")
@@ -470,13 +474,15 @@ async def test_loop_single_tool_then_final(tmp_path):
             gateway=gw,
             model="fake",
             system_prompt="sys",
-            user_prompt="read hi.txt",
+            user_prompt="read hi.txt, then reply exactly DONE",
             allowed_tools=["read"],
             sender_tier="owner",
             event_log=evlog,
         )
         assert rounds == 2
-        assert resp.content == "Read: hello world"
+        # A successful read does not authorize removing caveats from the
+        # returned answer just because its last line is a completion token.
+        assert resp.content == final_text
         assert len(trace) == 1
         assert trace[0]["name"] == "read"
         assert trace[0]["result"].get("ok") is True
@@ -1107,16 +1113,20 @@ async def test_no_progress_stall_forces_final(tmp_path):
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_tool_call_ceiling_forces_final(tmp_path):
+async def test_tool_call_ceiling_forces_final(tmp_path, monkeypatch):
     """When total_tool_calls exceeds MAX_TOOL_CALLS_PER_TURN, the loop
     must force a final answer."""
     import os
 
     os.environ["NORAX_WORKSPACE"] = str(tmp_path)
+    # Exercise the mechanism with a small local ceiling; the production value
+    # is asserted separately and should not make this unit test perform 200+
+    # synthetic model/tool rounds.
+    monkeypatch.setattr(agent_loop, "MAX_TOOL_CALLS_PER_TURN", 8)
     f = tmp_path / "a.txt"
     f.write_text("x")
 
-    # Each round emits 80 tool calls with unique args to avoid dedup.
+    # The first round emits more calls than the patched ceiling.
     def make_calls(i):
         calls = []
         for j in range(80):
@@ -1129,10 +1139,8 @@ async def test_tool_call_ceiling_forces_final(tmp_path):
             )
         return calls
 
-    # Round 0: 80 calls (total=80)
-    # Round 1: 80 calls (total=160)
-    # Round 2 requests 80 calls, but only the remaining 40 may execute before
-    # the hard 200-call ceiling terminates the turn.
+    # Only the first eight calls may execute; the rest are rejected before
+    # another model round is needed.
     responses = [
         httpx.Response(200, json=_openai_response(tool_calls=make_calls(0))),
         httpx.Response(200, json=_openai_response(tool_calls=make_calls(1))),
@@ -1157,12 +1165,10 @@ async def test_tool_call_ceiling_forces_final(tmp_path):
         assert "not verified" in resp.content
         assert resp.raw["limit_reason"] == "tool_call_ceiling"
         assert resp.raw["tool_calls_executed"] == agent_loop.MAX_TOOL_CALLS_PER_TURN
-        assert resp.raw["tool_calls_rejected"] == 40
+        assert resp.raw["tool_calls_rejected"] == 80 - agent_loop.MAX_TOOL_CALLS_PER_TURN
         assert len(trace) == agent_loop.MAX_TOOL_CALLS_PER_TURN
-        # Two complete 80-call rounds plus only the remaining 40 calls. The
-        # fourth provider response is never requested.
-        assert rounds == 3
-        assert route.call_count == 3
+        assert rounds == 1
+        assert route.call_count == 1
     finally:
         await gw.aclose()
 
@@ -1172,17 +1178,14 @@ async def test_tool_call_ceiling_forces_final(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_default_max_rounds_is_150():
-    """Ensure DEFAULT_MAX_ROUNDS is 150 (bounded to prevent re-reading loops)."""
-    assert agent_loop.DEFAULT_MAX_ROUNDS == 150
+def test_default_max_rounds_supports_full_completion():
+    """The normal turn budget must support extended implementation work."""
+    assert agent_loop.DEFAULT_MAX_ROUNDS == 250
 
 
-def test_hard_round_cap_leaves_default_headroom():
-    """Ensure HARD_ROUND_CAP leaves headroom above the normal 150-round budget."""
-    assert (
-        agent_loop.HARD_ROUND_CAP == 200
-        or agent_loop.HARD_ROUND_CAP > agent_loop.DEFAULT_MAX_ROUNDS
-    )
+def test_hard_round_cap_does_not_clip_the_default_budget():
+    """The emergency ceiling must not silently shorten a normal turn."""
+    assert agent_loop.HARD_ROUND_CAP >= agent_loop.DEFAULT_MAX_ROUNDS
 
 
 def test_final_verification_nudge_limit_is_3():
@@ -1193,8 +1196,7 @@ def test_final_verification_nudge_limit_is_3():
 def test_max_tool_calls_per_turn_defined():
     """Ensure MAX_TOOL_CALLS_PER_TURN ceiling exists and is reasonable."""
     assert hasattr(agent_loop, "MAX_TOOL_CALLS_PER_TURN")
-    assert agent_loop.MAX_TOOL_CALLS_PER_TURN > 0
-    assert agent_loop.MAX_TOOL_CALLS_PER_TURN == 200
+    assert agent_loop.MAX_TOOL_CALLS_PER_TURN >= agent_loop.DEFAULT_MAX_ROUNDS * 4
 
 
 def test_no_progress_round_limit_defined():

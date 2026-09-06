@@ -1,5 +1,7 @@
 """Orchestrator plan parsing and round-cap helpers."""
 
+import asyncio
+
 import pytest
 
 from norax.brain.orchestrator import FALLBACK_PLANNER_MODEL, Orchestrator
@@ -268,8 +270,9 @@ def test_resolve_round_cap():
 
     assert Orchestrator._resolve_round_cap(0) == MAX_ORCH_ROUNDS
     assert Orchestrator._resolve_round_cap(12) == 12
-    assert Orchestrator._resolve_round_cap(48) == HARD_ORCH_ROUND_CAP
-    assert Orchestrator._resolve_round_cap(100) == HARD_ORCH_ROUND_CAP
+    assert Orchestrator._resolve_round_cap(100) == 100
+    assert Orchestrator._resolve_round_cap(250) == 250
+    assert Orchestrator._resolve_round_cap(1000) == HARD_ORCH_ROUND_CAP
 
 
 @pytest.mark.asyncio
@@ -363,3 +366,54 @@ async def test_orchestrator_result_reports_turn_wide_planner_usage() -> None:
 
     assert result.content == "completed"
     assert result.usage == {"input_tokens": 7, "output_tokens": 3}
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_preserves_continuation_context() -> None:
+    from norax.gateway_client import GatewayResponse
+
+    class Router:
+        async def chat(self, req):
+            assert {"role": "user", "content": "Project target is parser.py"} in req.messages
+            assert req.messages[-1] == {"role": "user", "content": "continue"}
+            assert sum(m["role"] == "system" for m in req.messages) == 1
+            return GatewayResponse(request_id="r", model=req.model, content="DONE: explained")
+
+    prior = [
+        {"role": "system", "content": "obsolete system"},
+        {"role": "user", "content": "Project target is parser.py"},
+    ]
+    await Orchestrator(Router()).run(
+        system_prompt="current system",
+        user_prompt="continue",
+        allowed_tools=[],
+        sender_tier="owner",
+        planner_model="planner-model",
+        prior_messages=prior,
+    )
+    assert prior[0]["content"] == "obsolete system"
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_deadline_cancels_planner_and_reports_incomplete() -> None:
+    cancelled = asyncio.Event()
+
+    class Router:
+        async def chat(self, req):
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+    result = await Orchestrator(Router()).run(
+        system_prompt="system",
+        user_prompt="complete the task",
+        allowed_tools=[],
+        sender_tier="owner",
+        timeout_seconds=0.02,
+    )
+    assert cancelled.is_set()
+    assert result.complete is False
+    assert result.verified_outcome is False
+    assert result.status_reason == "flow_timeout"
+    assert result.rounds == 1

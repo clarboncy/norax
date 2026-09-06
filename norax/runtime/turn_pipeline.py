@@ -655,6 +655,7 @@ class TurnPipelineMixin(RuntimeAccessMixin):
                     on_delta=on_delta,
                     max_rounds=self.max_tool_rounds,
                     planner_model=planner,
+                    prior_messages=prior,
                 )
                 content, trace, rounds = orch_result
                 resp = GatewayResponse(

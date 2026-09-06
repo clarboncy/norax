@@ -165,13 +165,18 @@ def test_invalid_runtime_numeric_environment_uses_safe_default(tmp_path, monkeyp
     assert cfg.max_tool_rounds == 80
 
 
+def test_minimal_install_gets_the_full_completion_round_budget(tmp_path, monkeypatch):
+    monkeypatch.delenv("NORAX_MAX_TOOL_ROUNDS", raising=False)
+    assert Config(raw={}, project_root=tmp_path).max_tool_rounds == 250
+
+
 def test_runtime_numeric_config_rejects_nonfinite_and_negative_values(tmp_path, monkeypatch):
     monkeypatch.delenv("NORAX_MAX_TOOL_ROUNDS", raising=False)
     cfg = Config(
         raw={"runtime": {"max_tool_rounds": -1, "shutdown_grace_seconds": "nan"}},
         project_root=tmp_path,
     )
-    assert cfg.max_tool_rounds == 8
+    assert cfg.max_tool_rounds == 250
     assert cfg.shutdown_grace_seconds == 10.0
 
 

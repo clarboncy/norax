@@ -21,7 +21,7 @@ def _coerce_tool_args_json(content: object) -> str:
         return "{}"
     if isinstance(content, (dict, list)):
         try:
-            return _json.dumps(content)
+            return _json.dumps(content if isinstance(content, dict) else {"_raw": content})
         except Exception:  # noqa: BLE001
             return "{}"
     s = str(content).strip()
@@ -41,17 +41,24 @@ def _coerce_tool_args_json(content: object) -> str:
 def _bounded_history_text(content: str, max_chars: int) -> str:
     """Keep both ends of an oversized historical message within budget."""
     text = str(content or "")
-    if max_chars <= 0 or len(text) <= max_chars:
+    if max_chars <= 0:
+        return ""
+    if len(text) <= max_chars:
         return text
     marker = f"\n...[historical message truncated; {len(text)} chars total]...\n"
+    if max_chars <= len(marker):
+        return text[:max_chars]
     available = max(0, max_chars - len(marker))
     head = available // 2
-    return text[:head] + marker + text[-(available - head) :]
+    tail = available - head
+    return text[:head] + marker + (text[-tail:] if tail else "")
 
 
 def _clean_historical_assistant_text(content: str) -> str:
     """Remove private reasoning and leaked harness headers from replayed replies."""
-    text = re.sub(r"<thinking>.*?</thinking>", "", str(content or ""), flags=re.DOTALL)
+    from ..gateway_client import strip_reasoning_blocks
+
+    text = strip_reasoning_blocks(str(content or ""))
     lines = text.lstrip().splitlines()
     while lines and (not lines[0].strip() or re.match(r"^(?:GOAL|PLAN|RISK):", lines[0].strip())):
         lines.pop(0)
@@ -59,7 +66,12 @@ def _clean_historical_assistant_text(content: str) -> str:
 
 
 def _history_turn_limit(user_prompt: str) -> int:
-    """Use more history only when the user clearly asks to continue it."""
+    """Return the candidate-turn ceiling before token-budget projection.
+
+    The final history is still strictly bounded by ``_select_history_tail``.
+    These wider ceilings preserve continuity across model switches and long
+    projects without sending an unbounded prompt to any provider.
+    """
     text = " ".join(str(user_prompt or "").lower().split())
     words = re.findall(r"[a-z0-9_+-]+", text)
     if len(words) <= 8 and re.match(
@@ -67,8 +79,8 @@ def _history_turn_limit(user_prompt: str) -> int:
         r"do it|fix that|same thing|what about|and (?:then|now)|yes|ok|okay)\b",
         text,
     ):
-        return 8
-    return 3
+        return 64
+    return 16
 
 
 def _candidate_prior_turn_ids(frames: list[Frame], user_prompt: str) -> set[int]:
@@ -122,41 +134,64 @@ def _select_history_tail(
     most recent pairs are retained because TaskState already carries compact
     evidence from earlier actions.
     """
-    ordered_turns = list(
-        dict.fromkeys(frame.turn_id for frame in frames if frame.turn_id in candidate_turn_ids)
-    )
+    if token_budget <= 0:
+        return set(), set(), 0
+    by_turn: dict[int, list[Frame]] = {}
+    for frame in frames:
+        if frame.turn_id in candidate_turn_ids:
+            by_turn.setdefault(frame.turn_id, []).append(frame)
+    ordered_turns = list(by_turn)
     text_cap_tokens = max(512, min(2_048, token_budget // 4))
     max_tool_pairs = max(1, min(12, token_budget // 1_600))
 
-    valid_calls_by_turn: dict[int, set[str]] = {}
+    valid_calls_by_turn: dict[int, list[str]] = {}
     for turn_id in ordered_turns:
         calls = [
             frame.call_id
-            for frame in frames
-            if frame.turn_id == turn_id and frame.kind == "tool_call" and frame.call_id
+            for frame in by_turn[turn_id]
+            if frame.kind == "tool_call" and frame.call_id
         ]
         results = {
             frame.call_id
-            for frame in frames
-            if frame.turn_id == turn_id and frame.kind == "tool_result" and frame.call_id
+            for frame in by_turn[turn_id]
+            if frame.kind == "tool_result" and frame.call_id
         }
         valid = [call_id for call_id in calls if call_id in results]
-        valid_calls_by_turn[turn_id] = set(valid[-max_tool_pairs:])
+        valid_calls_by_turn[turn_id] = list(dict.fromkeys(valid))[-max_tool_pairs:]
 
     def turn_cost(turn_id: int) -> int:
         cost = 0
-        valid_calls = valid_calls_by_turn[turn_id]
-        for frame in frames:
-            if frame.turn_id != turn_id:
-                continue
+        valid_calls = set(valid_calls_by_turn[turn_id])
+        for frame in by_turn[turn_id]:
             if frame.kind in {"tool_call", "tool_result"}:
                 if frame.call_id not in valid_calls:
                     continue
-                cap = 300 if frame.kind == "tool_call" else 500
-                cost += min(frame.token_estimate(), cap) + 16
+                if frame.kind == "tool_call":
+                    # Arguments are emitted as valid JSON, never truncated.
+                    # Charging only 300 tokens here let historical writes send
+                    # many thousands of unbudgeted tokens to a smaller model.
+                    content = _coerce_tool_args_json(frame.content)
+                    content += str(frame.meta.get("name", "unknown"))
+                else:
+                    content = _bounded_history_text(frame.content, 2_000)
+                cost += (len(content) + len(frame.call_id or "") + 3) // 4 + 32
             else:
-                cost += min(frame.token_estimate(), text_cap_tokens) + 16
+                cost += min((len(frame.content) + 3) // 4, text_cap_tokens) + 32
         return cost
+
+    if ordered_turns:
+        latest = ordered_turns[-1]
+        # Preserve the latest user request and answer when its tool trace is
+        # too large. Previously the first over-budget turn discarded *all*
+        # history, including the task that a "continue" refers to.
+        while valid_calls_by_turn[latest] and turn_cost(latest) > token_budget:
+            valid_calls_by_turn[latest].pop(0)
+        if turn_cost(latest) > token_budget:
+            text_frames = sum(
+                frame.kind not in {"tool_call", "tool_result"} for frame in by_turn[latest]
+            )
+            if text_frames:
+                text_cap_tokens = max(1, token_budget // text_frames - 32)
 
     selected_turns: set[int] = set()
     remaining = max(0, token_budget)

@@ -39,7 +39,7 @@ from ..gateway_client import SpendGuardTripped
 log = logging.getLogger("norax.multi_agent")
 MAX_SUBTASKS = 8
 MAX_CONCURRENT_SUBAGENTS = 4
-MAX_SUBAGENT_ROUNDS = 32
+MAX_SUBAGENT_ROUNDS = 250
 
 # ── Sub-agent roles ──────────────────────────────────────────────────────
 
@@ -99,7 +99,7 @@ class SubTask:
     role: str = ROLE_GENERAL
     tools: list[str] = field(default_factory=list)
     context: str = ""  # extra context from parent
-    max_rounds: int = 50
+    max_rounds: int = 250
     depends_on: list[str] = field(default_factory=list)  # subtask IDs this depends on
 
 
@@ -324,7 +324,6 @@ class MultiAgentOrchestrator:
                     description=f"Research phase: {task}",
                     role=ROLE_RESEARCH,
                     tools=ROLE_TOOL_SETS.get(ROLE_RESEARCH, allowed_tools),
-                    max_rounds=10,
                 )
             )
             subtasks.append(
@@ -334,7 +333,6 @@ class MultiAgentOrchestrator:
                     role=execute_role,
                     tools=ROLE_TOOL_SETS.get(execute_role, allowed_tools),
                     context="Use findings from the research phase.",
-                    max_rounds=15,
                     depends_on=["s_research"],
                 )
             )
@@ -354,7 +352,6 @@ class MultiAgentOrchestrator:
                     description=f"Code phase: {task}",
                     role=ROLE_CODE,
                     tools=ROLE_TOOL_SETS.get(ROLE_CODE, allowed_tools),
-                    max_rounds=15,
                 )
             )
             subtasks.append(
@@ -364,7 +361,6 @@ class MultiAgentOrchestrator:
                     role=ROLE_VERIFY,
                     tools=ROLE_TOOL_SETS.get(ROLE_VERIFY, allowed_tools),
                     context="Verify the code written in the code phase.",
-                    max_rounds=8,
                     depends_on=["s_code"],
                 )
             )

@@ -1,0 +1,55 @@
+{
+  "schema": "norax.matched_tool_loop_observations.v2",
+  "date_utc": "2026-09-06",
+  "scope": "matched_tool_loop_not_full_agent_ranking",
+  "runner_sha256": "6ef0c8b69a32e331ac76bc78731e9b0577ea5652aa959335f41bae07c9792cf0",
+  "engine_revisions": {
+    "norax_base": "2aa07f73e3d91ff3125d1b83387dd4d074dd6268",
+    "hermes": "245e48008fa814b3251f50755eb656bd9fb86cb1"
+  },
+  "controls": {
+    "tasks": ["repair_clamp", "aggregate", "transient_recovery"],
+    "repetitions": 3,
+    "trials_per_engine_per_connector": 9,
+    "round_limit": 250,
+    "turn_budget_seconds": 14400,
+    "request_timeout_seconds": 600,
+    "max_output_tokens": 4096,
+    "fresh_memory": true,
+    "alternating_engine_order": true,
+    "artifact_checks_independent_of_model_output": true
+  },
+  "local_qwen": {
+    "model": "qwen3.8-27b-fast:latest",
+    "raw_results": "matched-local-250-20260906.json",
+    "raw_sha256": "28850d60642e140dac2140509dd7fdff5328a5e625ab8da0d9e99e49a998b67c",
+    "summary": {
+      "norax": {"passed": 9, "trials": 9, "median_seconds": 5.864},
+      "hermes": {"passed": 9, "trials": 9, "median_seconds": 8.644}
+    },
+    "task_median_seconds": {
+      "norax": {"repair_clamp": 5.142, "aggregate": 5.951, "transient_recovery": 8.499},
+      "hermes": {"repair_clamp": 9.176, "aggregate": 10.756, "transient_recovery": 7.961}
+    }
+  },
+  "cloud_glm": {
+    "model": "glm-5.3:cloud",
+    "raw_results": "matched-cloud-250-20260906.json",
+    "raw_sha256": "00135d00763f2f205066568c7a8d2dc030b2f1fb68128c37512160385e48a8de",
+    "summary": {
+      "norax": {"passed": 9, "trials": 9, "median_seconds": 2.1},
+      "hermes": {"passed": 9, "trials": 9, "median_seconds": 3.87}
+    },
+    "task_median_seconds": {
+      "norax": {"repair_clamp": 2.272, "aggregate": 2.148, "transient_recovery": 2.087},
+      "hermes": {"repair_clamp": 3.071, "aggregate": 3.87, "transient_recovery": 3.896}
+    }
+  },
+  "interpretation": [
+    "All 36 current trials passed independent artifact verification.",
+    "Norax had the lower overall median on both connectors and five of six task-by-connector cells; Hermes was lower on local transient recovery.",
+    "These three small tool-loop tasks do not establish a general full-agent ranking.",
+    "Engine-native prompts, sampling, retry policies, and initialization overhead differ.",
+    "Shared inference backends and warm caches were not controlled; timing is observational."
+  ]
+}

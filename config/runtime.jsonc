@@ -4,10 +4,9 @@
 
   "runtime": {
     "shutdown_grace_seconds": 10,
-    // Keep one runaway task from exhausting the shared per-minute model-call
-    // budget and silencing the owner's next prompt. Unfinished work checkpoints
-    // cleanly and can continue on the next turn.
-    "max_tool_rounds": 150,
+    // Full-completion budget. Genuine anti-loop, tool-call, and wall-clock
+    // guards remain active so repeated non-progress cannot consume all 250.
+    "max_tool_rounds": 250,
     // Bound parallel model/tool work and queued ingress so one burst cannot
     // exhaust memory or block cancellation on unrelated channels.
     "max_concurrent_turns": 8,

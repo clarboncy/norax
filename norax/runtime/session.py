@@ -15,6 +15,8 @@ from ._mixin import RuntimeAccessMixin
 
 log = logging.getLogger("norax.runtime.core")
 
+_CANONICAL_WINDOW_BUDGET_TOKENS = 256_000
+
 
 class SessionMixin(RuntimeAccessMixin):
     _turn_work_count: int
@@ -39,20 +41,17 @@ class SessionMixin(RuntimeAccessMixin):
         if channel_id not in self._windows:
             # Try to load persisted window from disk.
             path = self._window_path(channel_id)
-            self._windows[channel_id] = RollingWindow.load(path, budget_tokens=256_000)
+            self._windows[channel_id] = RollingWindow.load(
+                path, budget_tokens=_CANONICAL_WINDOW_BUDGET_TOKENS
+            )
             self._windows[channel_id].protect_tail_turns = 8
-        # Per-model window budget: profiles with `window_tokens` pin the
-        # rolling window to that model's verified max context (e.g.
-        # qwen3.8-27b-fast @ 80k) so the window never evicts before the
-        # model's context would fill. Other models keep the 256k default.
-        try:
-            from ..gateway_client.ollama_profiles import resolve_profile
-
-            prof = resolve_profile(getattr(self, "_effective_model", "") or "")
-            wt = int(getattr(prof, "window_tokens", 0) or 0)
-            self._windows[channel_id].budget_tokens = wt if wt else 256_000
-        except Exception:  # noqa: BLE001
-            pass
+        # The persisted conversation is canonical and model-independent.
+        # Never shrink it when switching to a smaller-context model: doing so
+        # permanently evicts history and makes a later cloud-model switch look
+        # like amnesia. turn_pipeline builds a bounded per-model projection for
+        # each request, so preserving the larger canonical store cannot overflow
+        # the selected provider's context window.
+        self._windows[channel_id].budget_tokens = _CANONICAL_WINDOW_BUDGET_TOKENS
         return self._windows[channel_id]
 
     def _persist_window(self, channel_id: str) -> None:

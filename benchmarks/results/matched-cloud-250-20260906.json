@@ -1,0 +1,495 @@
+{
+  "scope": "matched_tool_loop_not_full_agent_ranking",
+  "model": "glm-5.3:cloud",
+  "repeats": 3,
+  "round_limit": 250,
+  "turn_budget_seconds": 14400,
+  "summary": {
+    "norax": {
+      "passed": 9,
+      "trials": 9,
+      "median_seconds": 2.1
+    },
+    "hermes": {
+      "passed": 9,
+      "trials": 9,
+      "median_seconds": 3.87
+    }
+  },
+  "trials": [
+    {
+      "engine": "norax",
+      "task": "repair_clamp",
+      "seed": 20260906,
+      "seconds": 2.272,
+      "trace": [
+        {
+          "name": "bench_read",
+          "ok": true
+        },
+        {
+          "name": "bench_write",
+          "ok": true
+        },
+        {
+          "name": "bench_check",
+          "ok": true
+        }
+      ],
+      "artifact_verified": true,
+      "check_observed": true,
+      "final_verified": true,
+      "error": null,
+      "passed": true
+    },
+    {
+      "engine": "hermes",
+      "task": "repair_clamp",
+      "seed": 20260906,
+      "seconds": 4.393,
+      "trace": [
+        {
+          "name": "bench_read",
+          "ok": true
+        },
+        {
+          "name": "bench_write",
+          "ok": true
+        },
+        {
+          "name": "bench_check",
+          "ok": true
+        }
+      ],
+      "artifact_verified": true,
+      "check_observed": true,
+      "final_verified": true,
+      "error": null,
+      "passed": true
+    },
+    {
+      "engine": "norax",
+      "task": "aggregate",
+      "seed": 20260906,
+      "seconds": 1.901,
+      "trace": [
+        {
+          "name": "bench_read",
+          "ok": true
+        },
+        {
+          "name": "bench_write",
+          "ok": true
+        },
+        {
+          "name": "bench_check",
+          "ok": true
+        }
+      ],
+      "artifact_verified": true,
+      "check_observed": true,
+      "final_verified": true,
+      "error": null,
+      "passed": true
+    },
+    {
+      "engine": "hermes",
+      "task": "aggregate",
+      "seed": 20260906,
+      "seconds": 3.87,
+      "trace": [
+        {
+          "name": "bench_read",
+          "ok": true
+        },
+        {
+          "name": "bench_write",
+          "ok": true
+        },
+        {
+          "name": "bench_check",
+          "ok": true
+        }
+      ],
+      "artifact_verified": true,
+      "check_observed": true,
+      "final_verified": true,
+      "error": null,
+      "passed": true
+    },
+    {
+      "engine": "norax",
+      "task": "transient_recovery",
+      "seed": 20260906,
+      "seconds": 2.1,
+      "trace": [
+        {
+          "name": "bench_read",
+          "ok": false
+        },
+        {
+          "name": "bench_read",
+          "ok": true
+        },
+        {
+          "name": "bench_write",
+          "ok": true
+        },
+        {
+          "name": "bench_check",
+          "ok": true
+        }
+      ],
+      "artifact_verified": true,
+      "check_observed": true,
+      "final_verified": true,
+      "error": null,
+      "passed": true
+    },
+    {
+      "engine": "hermes",
+      "task": "transient_recovery",
+      "seed": 20260906,
+      "seconds": 3.896,
+      "trace": [
+        {
+          "name": "bench_read",
+          "ok": false
+        },
+        {
+          "name": "bench_read",
+          "ok": true
+        },
+        {
+          "name": "bench_write",
+          "ok": true
+        },
+        {
+          "name": "bench_check",
+          "ok": true
+        }
+      ],
+      "artifact_verified": true,
+      "check_observed": true,
+      "final_verified": true,
+      "error": null,
+      "passed": true
+    },
+    {
+      "engine": "hermes",
+      "task": "repair_clamp",
+      "seed": 20260907,
+      "seconds": 2.979,
+      "trace": [
+        {
+          "name": "bench_read",
+          "ok": true
+        },
+        {
+          "name": "bench_write",
+          "ok": true
+        },
+        {
+          "name": "bench_check",
+          "ok": true
+        }
+      ],
+      "artifact_verified": true,
+      "check_observed": true,
+      "final_verified": true,
+      "error": null,
+      "passed": true
+    },
+    {
+      "engine": "norax",
+      "task": "repair_clamp",
+      "seed": 20260907,
+      "seconds": 2.539,
+      "trace": [
+        {
+          "name": "bench_read",
+          "ok": true
+        },
+        {
+          "name": "bench_write",
+          "ok": true
+        },
+        {
+          "name": "bench_check",
+          "ok": true
+        }
+      ],
+      "artifact_verified": true,
+      "check_observed": true,
+      "final_verified": true,
+      "error": null,
+      "passed": true
+    },
+    {
+      "engine": "hermes",
+      "task": "aggregate",
+      "seed": 20260907,
+      "seconds": 3.969,
+      "trace": [
+        {
+          "name": "bench_read",
+          "ok": true
+        },
+        {
+          "name": "bench_write",
+          "ok": true
+        },
+        {
+          "name": "bench_check",
+          "ok": true
+        }
+      ],
+      "artifact_verified": true,
+      "check_observed": true,
+      "final_verified": true,
+      "error": null,
+      "passed": true
+    },
+    {
+      "engine": "norax",
+      "task": "aggregate",
+      "seed": 20260907,
+      "seconds": 2.148,
+      "trace": [
+        {
+          "name": "bench_read",
+          "ok": true
+        },
+        {
+          "name": "bench_write",
+          "ok": true
+        },
+        {
+          "name": "bench_check",
+          "ok": true
+        }
+      ],
+      "artifact_verified": true,
+      "check_observed": true,
+      "final_verified": true,
+      "error": null,
+      "passed": true
+    },
+    {
+      "engine": "hermes",
+      "task": "transient_recovery",
+      "seed": 20260907,
+      "seconds": 5.25,
+      "trace": [
+        {
+          "name": "bench_read",
+          "ok": false
+        },
+        {
+          "name": "bench_read",
+          "ok": true
+        },
+        {
+          "name": "bench_write",
+          "ok": true
+        },
+        {
+          "name": "bench_check",
+          "ok": true
+        }
+      ],
+      "artifact_verified": true,
+      "check_observed": true,
+      "final_verified": true,
+      "error": null,
+      "passed": true
+    },
+    {
+      "engine": "norax",
+      "task": "transient_recovery",
+      "seed": 20260907,
+      "seconds": 2.087,
+      "trace": [
+        {
+          "name": "bench_read",
+          "ok": false
+        },
+        {
+          "name": "bench_read",
+          "ok": true
+        },
+        {
+          "name": "bench_write",
+          "ok": true
+        },
+        {
+          "name": "bench_check",
+          "ok": true
+        }
+      ],
+      "artifact_verified": true,
+      "check_observed": true,
+      "final_verified": true,
+      "error": null,
+      "passed": true
+    },
+    {
+      "engine": "norax",
+      "task": "repair_clamp",
+      "seed": 20260908,
+      "seconds": 1.823,
+      "trace": [
+        {
+          "name": "bench_read",
+          "ok": true
+        },
+        {
+          "name": "bench_write",
+          "ok": true
+        },
+        {
+          "name": "bench_check",
+          "ok": true
+        }
+      ],
+      "artifact_verified": true,
+      "check_observed": true,
+      "final_verified": true,
+      "error": null,
+      "passed": true
+    },
+    {
+      "engine": "hermes",
+      "task": "repair_clamp",
+      "seed": 20260908,
+      "seconds": 3.071,
+      "trace": [
+        {
+          "name": "bench_read",
+          "ok": true
+        },
+        {
+          "name": "bench_write",
+          "ok": true
+        },
+        {
+          "name": "bench_check",
+          "ok": true
+        }
+      ],
+      "artifact_verified": true,
+      "check_observed": true,
+      "final_verified": true,
+      "error": null,
+      "passed": true
+    },
+    {
+      "engine": "norax",
+      "task": "aggregate",
+      "seed": 20260908,
+      "seconds": 2.242,
+      "trace": [
+        {
+          "name": "bench_read",
+          "ok": true
+        },
+        {
+          "name": "bench_write",
+          "ok": true
+        },
+        {
+          "name": "bench_check",
+          "ok": true
+        }
+      ],
+      "artifact_verified": true,
+      "check_observed": true,
+      "final_verified": true,
+      "error": null,
+      "passed": true
+    },
+    {
+      "engine": "hermes",
+      "task": "aggregate",
+      "seed": 20260908,
+      "seconds": 3.248,
+      "trace": [
+        {
+          "name": "bench_read",
+          "ok": true
+        },
+        {
+          "name": "bench_write",
+          "ok": true
+        },
+        {
+          "name": "bench_check",
+          "ok": true
+        }
+      ],
+      "artifact_verified": true,
+      "check_observed": true,
+      "final_verified": true,
+      "error": null,
+      "passed": true
+    },
+    {
+      "engine": "norax",
+      "task": "transient_recovery",
+      "seed": 20260908,
+      "seconds": 1.93,
+      "trace": [
+        {
+          "name": "bench_read",
+          "ok": false
+        },
+        {
+          "name": "bench_read",
+          "ok": true
+        },
+        {
+          "name": "bench_write",
+          "ok": true
+        },
+        {
+          "name": "bench_check",
+          "ok": true
+        }
+      ],
+      "artifact_verified": true,
+      "check_observed": true,
+      "final_verified": true,
+      "error": null,
+      "passed": true
+    },
+    {
+      "engine": "hermes",
+      "task": "transient_recovery",
+      "seed": 20260908,
+      "seconds": 3.06,
+      "trace": [
+        {
+          "name": "bench_read",
+          "ok": false
+        },
+        {
+          "name": "bench_read",
+          "ok": true
+        },
+        {
+          "name": "bench_write",
+          "ok": true
+        },
+        {
+          "name": "bench_check",
+          "ok": true
+        }
+      ],
+      "artifact_verified": true,
+      "check_observed": true,
+      "final_verified": true,
+      "error": null,
+      "passed": true
+    }
+  ]
+}

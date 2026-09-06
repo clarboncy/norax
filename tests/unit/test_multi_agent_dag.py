@@ -27,6 +27,35 @@ from norax.gateway_client import GatewayResponse, SpendGuardTripped
 
 
 @pytest.mark.asyncio
+async def test_decomposed_tasks_keep_the_requested_completion_budget(monkeypatch) -> None:
+    from norax.brain import agent_loop
+
+    received: list[int] = []
+
+    async def run_loop(**kwargs):
+        received.append(kwargs["max_rounds"])
+        return (
+            GatewayResponse(
+                request_id="r", model="fake", content="verified", raw={"verified_outcome": True}
+            ),
+            [],
+            1,
+            None,
+        )
+
+    monkeypatch.setattr(agent_loop, "run_agent_loop", run_loop)
+    orchestrator = MultiAgentOrchestrator(object(), default_model="fake")
+    result = await orchestrator.run(
+        task="implement the parser and verify it",
+        system_prompt="system",
+        allowed_tools=["read"],
+        sender_tier="owner",
+    )
+    assert received == [250, 250]
+    assert result.verified_outcome is True
+
+
+@pytest.mark.asyncio
 async def test_research_completes_before_execution() -> None:
     """Research phase must finish before execution phase starts."""
     execution_order: list[str] = []

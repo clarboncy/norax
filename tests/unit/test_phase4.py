@@ -9,6 +9,7 @@ import pytest
 import respx
 
 from norax.dispatch import Caller, Dispatcher, DispatchError
+from norax.dispatch import tools as tool_mod
 from norax.dispatch.budget import BudgetEnforcer, Caps
 from norax.dispatch.idempotency import IdempotencyCache
 from norax.dispatch.loop_guard import LoopDetected, LoopGuard
@@ -526,3 +527,144 @@ async def test_dispatch_web_fetch_reports_http_error_as_failure(monkeypatch):
     assert not r.ok
     assert r.result["error"] == "http_status"
     assert r.result["status"] == 404
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_uses_firecrawl_only_after_thin_public_html(monkeypatch):
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "test-key")
+
+    async def direct(**_kwargs):
+        return {
+            "ok": True,
+            "status": 200,
+            "url": "https://example.test/app",
+            "content_type": "text/html",
+            "text": "JavaScript required",
+        }
+
+    async def firecrawl(url, max_chars):
+        assert url == "https://example.test/app"
+        assert max_chars == 24_000
+        return {
+            "ok": True,
+            "markdown": "Rendered article",
+            "source_url": url,
+            "truncated": False,
+        }
+
+    monkeypatch.setattr(tool_mod, "_web_fetch_direct", direct)
+    monkeypatch.setattr(tool_mod, "_firecrawl_scrape", firecrawl)
+    monkeypatch.setattr(
+        tool_mod.socket,
+        "getaddrinfo",
+        lambda *_args: [(2, 1, 6, "", ("93.184.216.34", 443))],
+    )
+
+    result = await tool_mod.t_web_fetch(url="https://example.test/app")
+
+    assert result["ok"] is True
+    assert result["extractor"] == "firecrawl"
+    assert result["text"] == "Rendered article"
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_never_sends_private_target_to_firecrawl(monkeypatch):
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "test-key")
+    monkeypatch.setenv("NORAX_WEB_FETCH_ALLOW_PRIVATE", "1")
+
+    async def direct(**_kwargs):
+        return {
+            "ok": True,
+            "status": 200,
+            "url": "http://127.0.0.1/internal",
+            "content_type": "text/html",
+            "text": "short",
+        }
+
+    async def forbidden_firecrawl(*_args, **_kwargs):
+        pytest.fail("private URL was disclosed to Firecrawl")
+
+    monkeypatch.setattr(tool_mod, "_web_fetch_direct", direct)
+    monkeypatch.setattr(tool_mod, "_firecrawl_scrape", forbidden_firecrawl)
+
+    result = await tool_mod.t_web_fetch(url="http://127.0.0.1/internal")
+
+    assert result["ok"] is True
+    assert result["url"] == "http://127.0.0.1/internal"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_firecrawl_response_body_is_bounded(monkeypatch):
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "test-key")
+    respx.post(tool_mod._FIRECRAWL_API_URL).mock(
+        return_value=httpx.Response(
+            200,
+            headers={"content-length": str(tool_mod._FIRECRAWL_RESPONSE_MAX_BYTES + 1)},
+            content=b"{}",
+        )
+    )
+
+    result = await tool_mod._firecrawl_scrape("https://example.test", 24_000)
+
+    assert result["ok"] is False
+    assert result["error"] == "firecrawl_response_too_large"
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize(
+    ("status", "payload"),
+    [
+        (500, {"success": True, "data": {"markdown": "error page"}}),
+        (200, {"success": "false", "data": {"markdown": "error page"}}),
+        (200, {"success": True, "data": {"markdown": {"error": "not text"}}}),
+    ],
+)
+async def test_firecrawl_rejects_failed_or_malformed_success(monkeypatch, status, payload):
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "test-key")
+    respx.post(tool_mod._FIRECRAWL_API_URL).mock(return_value=httpx.Response(status, json=payload))
+    assert (await tool_mod._firecrawl_scrape("https://example.test", 24_000))["ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_unconfigured_firecrawl_does_not_add_dns_or_fallback_work(monkeypatch):
+    monkeypatch.delenv("FIRECRAWL_API_KEY", raising=False)
+    direct_result = {"ok": True, "content_type": "text/html", "text": "Short page"}
+
+    async def direct(**_kwargs):
+        return direct_result
+
+    async def unexpected(*_args, **_kwargs):
+        pytest.fail("unconfigured fallback added unnecessary work")
+
+    monkeypatch.setattr(tool_mod, "_web_fetch_direct", direct)
+    monkeypatch.setattr(tool_mod, "_web_fetch_url_error", unexpected)
+    monkeypatch.setattr(tool_mod, "_firecrawl_scrape", unexpected)
+    assert await tool_mod.t_web_fetch(url="https://example.test") is direct_result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("max_chars", [1, 100, 299])
+async def test_web_fetch_requested_short_excerpt_does_not_trigger_fallback(monkeypatch, max_chars):
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "test-key")
+    direct_result = {
+        "ok": True,
+        "content_type": "text/html",
+        "text": "a" * max_chars,
+        "truncated": True,
+    }
+
+    async def direct(**kwargs):
+        assert kwargs["max_chars"] == max_chars
+        return direct_result
+
+    async def unexpected(*_args, **_kwargs):
+        pytest.fail("a complete requested excerpt caused redundant fallback work")
+
+    monkeypatch.setattr(tool_mod, "_web_fetch_direct", direct)
+    monkeypatch.setattr(tool_mod, "_web_fetch_url_error", unexpected)
+    monkeypatch.setattr(tool_mod, "_firecrawl_scrape", unexpected)
+    assert (
+        await tool_mod.t_web_fetch(url="https://example.test", max_chars=max_chars) is direct_result
+    )

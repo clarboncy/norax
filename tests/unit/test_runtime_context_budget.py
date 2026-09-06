@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
+import pytest
+
 from norax.brain.agent_loop import _current_turn_anchor
-from norax.context.window import Frame
+from norax.context.window import Frame, RollingWindow
 from norax.runtime.core import (
     _bounded_history_text,
     _candidate_prior_turn_ids,
@@ -15,6 +18,8 @@ from norax.runtime.core import (
     _history_turn_limit,
     _select_history_tail,
 )
+from norax.runtime.history import _coerce_tool_args_json
+from norax.runtime.session import SessionMixin
 
 
 def test_history_budget_uses_context_capacity_and_action_reserve() -> None:
@@ -73,28 +78,93 @@ def test_oversized_history_text_preserves_head_and_tail() -> None:
     assert "historical message truncated" in bounded
 
 
-def test_fresh_task_limits_history_to_three_recent_turns() -> None:
+@pytest.mark.parametrize("limit", [0, 1, 8, 64])
+def test_tiny_history_cap_cannot_append_the_entire_original(limit) -> None:
+    assert len(_bounded_history_text("x" * 20_000, limit)) <= limit
+
+
+def test_oversized_latest_turn_preserves_task_without_overflow_or_mutation() -> None:
+    huge_args = json.dumps({"path": "app.py", "content": "x" * 50_000})
+    frames = [
+        Frame(kind="user", content="USER_GOAL" + "x" * 20_000, turn_id=1),
+        Frame(kind="tool_call", content=huge_args, turn_id=1, call_id="write-1"),
+        Frame(kind="tool_result", content='{"ok": true}', turn_id=1, call_id="write-1"),
+        Frame(kind="assistant", content="NEXT_STEP" + "y" * 20_000, turn_id=1),
+    ]
+    turns, calls, cap = _select_history_tail(frames, {1}, token_budget=1_024)
+    assert turns == {1}
+    assert calls == set()
+    assert 2 * ((cap + 3) // 4 + 32) <= 1_024
+    assert _bounded_history_text(frames[0].content, cap).startswith("USER_GOAL")
+    assert _bounded_history_text(frames[-1].content, cap).startswith("NEXT_STEP")
+    assert frames[1].content == huge_args
+
+
+def test_large_tool_arguments_are_charged_at_emitted_size() -> None:
+    frames = [
+        Frame(kind="user", content="Implement the parser", turn_id=1),
+        Frame(kind="tool_call", content=json.dumps({"code": "x" * 12_000}), turn_id=1, call_id="c"),
+        Frame(kind="tool_result", content='{"ok": true}', turn_id=1, call_id="c"),
+        Frame(kind="assistant", content="Verify the saved parser next", turn_id=1),
+    ]
+    turns, calls, _ = _select_history_tail(frames, {1}, token_budget=2_048)
+    assert turns == {1}
+    assert calls == set()
+
+
+def test_historical_list_tool_arguments_become_a_json_object() -> None:
+    assert json.loads(_coerce_tool_args_json([1, 2])) == {"_raw": [1, 2]}
+
+
+def test_model_switch_history_does_not_replay_alternate_thinking_tags() -> None:
+    assert _clean_historical_assistant_text("<think>private</think>\nSaved the file") == (
+        "Saved the file"
+    )
+
+
+def test_fresh_task_keeps_sixteen_candidate_turns_before_token_projection() -> None:
     frames = [
         Frame(kind="user", content=f"old request {turn_id}", turn_id=turn_id)
-        for turn_id in range(1, 9)
+        for turn_id in range(1, 21)
     ]
 
-    assert _history_turn_limit("Please fix the current authentication failure") == 3
+    assert _history_turn_limit("Please fix the current authentication failure") == 16
     assert _candidate_prior_turn_ids(frames, "Please fix the current authentication failure") == {
-        6,
-        7,
-        8,
+        *range(5, 21),
     }
 
 
-def test_explicit_continuation_can_use_a_larger_recent_tail() -> None:
+def test_explicit_continuation_can_use_a_sixty_four_turn_tail() -> None:
     frames = [
         Frame(kind="user", content=f"request {turn_id}", turn_id=turn_id)
-        for turn_id in range(1, 11)
+        for turn_id in range(1, 81)
     ]
 
-    assert _history_turn_limit("continue") == 8
-    assert _candidate_prior_turn_ids(frames, "continue") == set(range(3, 11))
+    assert _history_turn_limit("continue") == 64
+    assert _candidate_prior_turn_ids(frames, "continue") == set(range(17, 81))
+
+
+def test_model_switch_does_not_shrink_the_canonical_window(tmp_path) -> None:
+    channel = "switch-test"
+    path = tmp_path / "state" / "windows" / f"{channel}.json"
+    persisted = RollingWindow(budget_tokens=65_536)
+    persisted.add_user("retain this exact context")
+    persisted.save(path)
+
+    session = SessionMixin()
+    session.cfg = SimpleNamespace(memory_root=tmp_path)
+    session._windows = {}
+    session._effective_model = "qwen3.8-27b-fast:latest"
+
+    local_window = session._get_window(channel)
+    assert local_window.budget_tokens == 256_000
+    assert [frame.content for frame in local_window.body] == ["retain this exact context"]
+
+    session._effective_model = "glm-5.3:cloud"
+    cloud_window = session._get_window(channel)
+    assert cloud_window is local_window
+    assert cloud_window.budget_tokens == 256_000
+    assert [frame.content for frame in cloud_window.body] == ["retain this exact context"]
 
 
 def test_historical_assistant_scaffolding_is_not_replayed() -> None:

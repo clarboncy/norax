@@ -618,13 +618,15 @@ def _supports_max_reasoning(model: str) -> bool:
     return m in ("glm-5.3:cloud", "glm-5.3-flash:cloud", "kimi-k3:cloud")
 
 
-ROUND_CAPS = (0, 6, 12, 24, 48)
+ROUND_CAPS = (0, 6, 12, 24, 48, 100, 250)
 ROUND_LABELS = {
     0: "Auto — use the agent loop's bounded default",
     6: "6 rounds — quick tasks",
     12: "12 rounds — moderate agent work",
     24: "24 rounds — heavy multi-step",
     48: "48 rounds — deep automation",
+    100: "100 rounds — extended implementation",
+    250: "250 rounds — full completion",
 }
 
 
@@ -1123,7 +1125,7 @@ async def _cmd_rounds(pc: ParsedCommand, env: Any, rt: RuntimeHandle) -> Command
         return CommandResult(
             reply=(
                 f"Tool round cap: `{label}`. "
-                "Set with `/rounds auto|6|12|24|48`. "
+                "Set with `/rounds auto|6|12|24|48|100|250`. "
                 f"There is no unlimited mode — a hard safety cap of {_hard_round_cap()} rounds "
                 "and the configured wall-clock deadline always apply."
             ),
@@ -1139,9 +1141,9 @@ async def _cmd_rounds(pc: ParsedCommand, env: Any, rt: RuntimeHandle) -> Command
         try:
             cap = int(raw)
         except ValueError:
-            return CommandResult(reply="Usage: `/rounds auto|6|12|24|48`.")
+            return CommandResult(reply="Usage: `/rounds auto|6|12|24|48|100|250`.")
     if cap not in ROUND_CAPS:
-        return CommandResult(reply="Usage: `/rounds auto|6|12|24|48`.")
+        return CommandResult(reply="Usage: `/rounds auto|6|12|24|48|100|250`.")
     hard_cap = _hard_round_cap()
     if cap > hard_cap:
         return CommandResult(

@@ -28,6 +28,59 @@ def _response(content: str, **message_fields: Any) -> dict[str, Any]:
     }
 
 
+@pytest.mark.parametrize(
+    ("base_url", "effort", "expected"),
+    [
+        (
+            "http://127.0.0.1:11435/v1",
+            "medium",
+            {"enable_thinking": True, "reasoning_effort": "medium"},
+        ),
+        (
+            "http://100.67.70.53:19136/v1",
+            "high",
+            {"enable_thinking": True, "reasoning_effort": "xhigh"},
+        ),
+        ("http://127.0.0.1:11435/v1", "off", {"enable_thinking": False}),
+    ],
+)
+@pytest.mark.asyncio
+async def test_llama_cpp_effort_mapping_is_explicit_for_local_and_remote_relays(
+    base_url: str,
+    effort: str,
+    expected: dict[str, Any],
+) -> None:
+    gateway = GatewayClient(base_url=base_url, provider_kind="openai")
+    payload: dict[str, Any] = {"reasoning_effort": effort}
+    try:
+        gateway._apply_llama_cpp_thinking(payload, effort)
+    finally:
+        await gateway.aclose()
+
+    assert payload["chat_template_kwargs"] == expected
+    assert "reasoning_effort" not in payload
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "https://llama.example.test/v1",
+        "https://api.example.test/proxy/:11435/v1",
+        "https://api.example.test:1913/v1?backend=:19136",
+    ],
+)
+async def test_unrelated_openai_endpoint_is_not_treated_as_llama_cpp(base_url) -> None:
+    gateway = GatewayClient(base_url=base_url, provider_kind="openai")
+    payload: dict[str, Any] = {"reasoning_effort": "medium"}
+    try:
+        gateway._apply_llama_cpp_thinking(payload, "medium")
+    finally:
+        await gateway.aclose()
+
+    assert payload == {"reasoning_effort": "medium"}
+
+
 class _RouterClient:
     def __init__(self, base_url: str) -> None:
         self.base_url = base_url

@@ -575,7 +575,7 @@ def _web_fetch_private_allowed() -> bool:
     }
 
 
-async def _web_fetch_url_error(url: str) -> str | None:
+async def _web_fetch_url_error(url: str, *, honor_private_opt_in: bool = True) -> str | None:
     """Return a reason when a URL is unsafe or cannot be resolved.
 
     Host resolution is repeated for every redirect.  This prevents the common
@@ -594,7 +594,7 @@ async def _web_fetch_url_error(url: str) -> str | None:
     host = (parsed.hostname or "").rstrip(".").lower()
     if not host:
         return "URL has no hostname"
-    if _web_fetch_private_allowed():
+    if honor_private_opt_in and _web_fetch_private_allowed():
         return None
     if (
         host in _WEB_FETCH_BLOCKED_HOSTS
@@ -675,8 +675,115 @@ async def _read_search_json(response: httpx.Response) -> dict:
     return payload
 
 
-async def t_web_fetch(*, url: str, max_chars: int = 24000) -> dict:
-    """Fetch a URL and return its content as text.
+_FIRECRAWL_API_URL = "https://api.firecrawl.dev/v1/scrape"
+_FIRECRAWL_TIMEOUT = 20.0
+_FIRECRAWL_RESPONSE_MAX_BYTES = 2 * 1024 * 1024
+_FIRECRAWL_MIN_DIRECT_CHARS = 300
+_FIRECRAWL_FALLBACK_ERRORS = frozenset(
+    {
+        "http_status",
+        "timeout",
+        "connection_failed",
+        "request_error",
+        "unsupported_content_type",
+    }
+)
+
+
+def _firecrawl_api_key() -> str:
+    return os.environ.get("FIRECRAWL_API_KEY", "").strip()
+
+
+async def _firecrawl_scrape(url: str, max_chars: int) -> dict:
+    """Fetch a URL via the Firecrawl scrape API and return markdown.
+
+    Returns ``{"ok": True, "markdown", ...}`` or ``{"ok": False, "error":
+    ...}``.  Never raises; an unconfigured or failed backend simply yields a
+    plain error dict so the caller can report the original direct-fetch
+    result.
+    """
+    api_key = _firecrawl_api_key()
+    if not api_key:
+        return {"ok": False, "error": "firecrawl_not_configured"}
+    payload = {
+        "url": url,
+        "formats": ["markdown"],
+        "onlyMainContent": True,
+    }
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(_FIRECRAWL_TIMEOUT, connect=8.0),
+        ) as c:
+            async with c.stream(
+                "POST",
+                _FIRECRAWL_API_URL,
+                json=payload,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+            ) as r:
+                declared_length = r.headers.get("content-length")
+                if declared_length:
+                    try:
+                        if int(declared_length) > _FIRECRAWL_RESPONSE_MAX_BYTES:
+                            return {
+                                "ok": False,
+                                "error": "firecrawl_response_too_large",
+                                "status": r.status_code,
+                            }
+                    except ValueError:
+                        pass
+                raw, truncated = await _read_web_body(r, _FIRECRAWL_RESPONSE_MAX_BYTES)
+                if truncated:
+                    return {
+                        "ok": False,
+                        "error": "firecrawl_response_too_large",
+                        "status": r.status_code,
+                    }
+    except httpx.TimeoutException:
+        return {"ok": False, "error": "firecrawl_timeout"}
+    except httpx.RequestError as e:
+        return {"ok": False, "error": "firecrawl_request_error", "detail": str(e)[:500]}
+    try:
+        data = json.loads(raw)
+    except (UnicodeDecodeError, ValueError):
+        return {"ok": False, "error": "firecrawl_bad_response", "status": r.status_code}
+    if not r.is_success or not isinstance(data, dict) or data.get("success") is not True:
+        detail = data.get("error") if isinstance(data, dict) else None
+        return {
+            "ok": False,
+            "error": "firecrawl_failed",
+            "status": r.status_code,
+            "detail": str(detail)[:500] if detail else None,
+        }
+    body = data.get("data") or {}
+    if not isinstance(body, dict):
+        return {"ok": False, "error": "firecrawl_bad_response", "status": r.status_code}
+    markdown = body.get("markdown")
+    if not isinstance(markdown, str):
+        return {"ok": False, "error": "firecrawl_bad_response", "status": r.status_code}
+    markdown = markdown.strip()
+    if not markdown:
+        return {"ok": False, "error": "firecrawl_empty"}
+    metadata = body.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    title = str(metadata.get("title") or "").strip()
+    source_url = str(metadata.get("sourceURL") or metadata.get("url") or url)
+    out: dict[str, Any] = {
+        "ok": True,
+        "markdown": markdown[:max_chars],
+        "truncated": len(markdown) > max_chars,
+        "source_url": source_url,
+    }
+    if title:
+        out["title"] = title
+    return out
+
+
+async def _web_fetch_direct(*, url: str, max_chars: int = 24000) -> dict:
+    """Direct HTTP fetch of a URL (no external fallback service).
 
     Uses trafilatura for clean article extraction when available; falls back
     to HTML tag-stripping regex otherwise.
@@ -809,6 +916,60 @@ async def t_web_fetch(*, url: str, max_chars: int = 24000) -> dict:
         "redirects": redirects,
         "truncated": truncated,
         "text": text,
+    }
+
+
+async def t_web_fetch(*, url: str, max_chars: int = 24000) -> dict:
+    """Fetch a URL and return its content as text.
+
+    Direct HTTP fetch first (fast, no API cost).  When the direct fetch is
+    bot-blocked, times out, or yields a JS-rendered shell, transparently
+    retries through the Firecrawl scrape API (renders JS, bypasses common
+    anti-bot walls).  Private-network targets are never sent to Firecrawl —
+    the direct path is the only path for them.
+    """
+    requested_url = str(url or "").strip()
+    parsed_limit = _coerce_int(max_chars, default=24_000) or 24_000
+    max_chars = min(_WEB_FETCH_MAX_CHARS, max(1, parsed_limit))
+
+    direct = await _web_fetch_direct(url=requested_url, max_chars=max_chars)
+    if not _firecrawl_api_key():
+        return direct
+
+    if direct.get("ok") is True:
+        text = str(direct.get("text") or "")
+        media = str(direct.get("content_type") or "")
+        if media != "text/html" or len(text) >= min(_FIRECRAWL_MIN_DIRECT_CHARS, max_chars):
+            return direct
+        # Thin HTML page — likely a JS-rendered shell.  Retry through
+        # Firecrawl; keep the direct result if Firecrawl cannot do better.
+    elif str(direct.get("error") or "") not in _FIRECRAWL_FALLBACK_ERRORS:
+        return direct
+
+    # Check disclosure permission only when the fallback is actually needed.
+    # A direct-fetch intranet opt-in never authorizes an external scraper.
+    # Check the redirect destination too; a public URL may lead to an intranet.
+    for target in dict.fromkeys((requested_url, str(direct.get("url") or requested_url))):
+        if await _web_fetch_url_error(target, honor_private_opt_in=False) is not None:
+            return direct
+
+    fc = await _firecrawl_scrape(requested_url, max_chars)
+    if fc.get("ok") is not True:
+        if direct.get("ok") is True:
+            return direct
+        note = f"fallback_failed ({fc.get('error', 'unknown')})"
+        if direct.get("error"):
+            direct = dict(direct)
+            direct["fallback"] = note
+        return direct
+    return {
+        "ok": True,
+        "status": 200,
+        "url": str(fc.get("source_url") or requested_url),
+        "content_type": "text/html",
+        "extractor": "firecrawl",
+        "truncated": bool(fc.get("truncated")),
+        "text": str(fc.get("markdown") or ""),
     }
 
 
@@ -2291,7 +2452,7 @@ REGISTRY: dict[str, ToolSpec] = {
     ),
     "read": ToolSpec(
         "read",
-        "Read a text file. Returns content + total_lines. Use offset+limit for files >200KB. Set large=true only when a larger contiguous chunk is needed; its result gets a bounded 48KB reasoning budget and is still compacted before entering the rolling window. ALWAYS read before editing.",
+        "Read a text file. Relative paths start in the active workspace; do not search the whole filesystem for them. Returns content + total_lines. Use offset+limit for files >200KB. Set large=true only when a larger contiguous chunk is needed; its result gets a bounded 48KB reasoning budget and is still compacted before entering the rolling window. ALWAYS read before editing.",
         {"path": "str", "limit": "int?", "offset": "int?", "large": "bool?"},
         t_read,
     ),
@@ -2303,7 +2464,9 @@ REGISTRY: dict[str, ToolSpec] = {
     ),
     "web_fetch": ToolSpec(
         "web_fetch",
-        "Fetch a public HTTP(S) URL and return bounded text content. Strips HTML tags automatically. Use for reading web pages, APIs, and docs. Default 24K chars; private-network targets require an explicit operator opt-in.",
+        "Fetch a public HTTP(S) URL and return bounded text content. Strips HTML tags automatically; uses trafilatura for article pages. "
+        "If the direct fetch is bot-blocked, times out, or returns a JS-rendered shell, it transparently retries through the Firecrawl scrape API (JS rendering). "
+        "Default 24K chars; private-network targets require an explicit operator opt-in and are never proxied externally.",
         {"url": "str", "max_chars": "int?"},
         t_web_fetch,
     ),
@@ -2342,7 +2505,7 @@ REGISTRY: dict[str, ToolSpec] = {
     "status": ToolSpec("status", "Return runtime status.", {}, t_status),
     "write": ToolSpec(
         "write",
-        "Write/overwrite a complete text file in one call when it fits the model output. Creates parents. Use `write_chunk` only when the content cannot fit reliably in one tool call.",
+        "Write/overwrite a complete text file in one call when it fits the model output. Relative paths start in the active workspace. Creates parents. Use `write_chunk` only when the content cannot fit reliably in one tool call.",
         {"path": "str", "content": "str"},
         t_write,
     ),
@@ -2378,7 +2541,7 @@ REGISTRY: dict[str, ToolSpec] = {
     ),
     "exec": ToolSpec(
         "exec",
-        "Run a one-shot shell command (bash). No cwd persistence. Returns stdout/stderr/exit_code. Timeout: 1-600s (default 30s); background longer jobs and poll their output. PATH includes ~/.local/bin. T2 — dangerous patterns blocked by RiskGate.",
+        "Run a one-shot shell command (bash) in the active workspace by default; use relative paths there and do not cd to ~ to find task files. No cwd persistence. Returns stdout/stderr/exit_code. Timeout: 1-600s (default 30s); background longer jobs and poll their output. PATH includes ~/.local/bin. T2 — dangerous patterns blocked by RiskGate.",
         {"command": "str", "cwd": "str?", "timeout": "float?"},
         t_exec,
     ),

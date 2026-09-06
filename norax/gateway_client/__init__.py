@@ -31,6 +31,7 @@ from collections import deque
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field, replace
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 import ulid
@@ -867,6 +868,46 @@ class GatewayClient:
         if ":4146" in url or ":4147" in url:
             return "codex_direct"
         return "openai"
+
+    def _is_llama_cpp_endpoint(self) -> bool:
+        """True when this client targets a llama.cpp server (llama-server's
+        OpenAI-compatible endpoint), where thinking is controlled via
+        chat_template_kwargs rather than reasoning_effort."""
+        kind = self.provider_kind or ""
+        if kind == "llama_cpp":
+            return True
+        url = self.base_url or ""
+        # 11435 is the direct local server; 19136 is Norax's transparent
+        # Ollama-compatible relay to that same llama.cpp server.
+        try:
+            parsed = urlsplit(url)
+            return parsed.scheme in {"http", "https"} and parsed.port in {11435, 19136}
+        except ValueError:
+            return False
+
+    def _apply_llama_cpp_thinking(self, payload: dict[str, Any], effort: object) -> None:
+        """Translate Norax effort names to Qwen's llama.cpp template controls."""
+        if not self._is_llama_cpp_endpoint() or effort is None:
+            return
+        normalized = str(effort).strip().lower()
+        kwargs = payload.setdefault("chat_template_kwargs", {})
+        if normalized in {"off", "none", "minimal", "false", "no"}:
+            kwargs["enable_thinking"] = False
+        else:
+            # Qwen's shipped llama.cpp template supports low, medium, xhigh.
+            # Norax exposes high/max/ultra too, so map those to its strongest
+            # native level rather than letting the template silently default.
+            mapped = {
+                "low": "low",
+                "medium": "medium",
+                "high": "xhigh",
+                "xhigh": "xhigh",
+                "max": "xhigh",
+                "ultra": "xhigh",
+            }.get(normalized, "xhigh")
+            kwargs["enable_thinking"] = True
+            kwargs["reasoning_effort"] = mapped
+        payload.pop("reasoning_effort", None)
 
     def provider_kind_for_model(self, model: str) -> str:
         """Return the request transport kind for a model.
@@ -1818,7 +1859,7 @@ class GatewayClient:
         }
         # Enable llama-server KV prefix cache reuse for local OpenAI-compatible endpoints.
         # This lets the server skip reprocessing the system prompt prefix across turns.
-        if self._provider_kind() == "openai" and ":11435" in self.base_url:
+        if self._is_llama_cpp_endpoint():
             payload["cache_prompt"] = True
         if req.tools and self._tools_supported_for_request(req):
             payload["tools"] = self._format_tools_for_provider(req.tools, model=req.model)
@@ -1840,6 +1881,8 @@ class GatewayClient:
                 payload["reasoning_effort"] = "none"
             if req.metadata.get("reasoning_output"):
                 payload["reasoning"] = {"summary": "auto"}
+            # llama.cpp reads these controls from chat_template_kwargs.
+            self._apply_llama_cpp_thinking(payload, effort)
         # OpenAI lets callers pass a `user` field for abuse tracking;
         # we use `metadata.user` when present. Request id goes in
         # `metadata` which every provider we hit ignores gracefully.
@@ -2090,7 +2133,7 @@ class GatewayClient:
             "stream": True,
         }
         # Enable llama-server KV prefix cache reuse for local OpenAI-compatible endpoints.
-        if self._provider_kind() == "openai" and ":11435" in self.base_url:
+        if self._is_llama_cpp_endpoint():
             payload["cache_prompt"] = True
         if req.tools and self._tools_supported_for_request(req):
             payload["tools"] = self._format_tools_for_provider(req.tools, model=req.model)
@@ -2112,6 +2155,7 @@ class GatewayClient:
                 payload["reasoning_effort"] = "none"
             if req.metadata.get("reasoning_output"):
                 payload["reasoning"] = {"summary": "auto"}
+            self._apply_llama_cpp_thinking(payload, effort)
         if req.metadata:
             if "user" in req.metadata:
                 payload["user"] = str(req.metadata["user"])

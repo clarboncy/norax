@@ -199,7 +199,7 @@ def _normalize_snapshot(raw: dict[str, Any]) -> dict[str, Any]:
 
 def _rounds_label(snap: dict[str, Any]) -> str:
     rounds = int(snap.get("max_tool_rounds") or 0)
-    return "unlimited" if rounds == 0 else str(rounds)
+    return "auto" if rounds == 0 else str(rounds)
 
 
 def settings_message(snap: dict[str, Any], *, note: str = "", page: str = "") -> str:
@@ -645,7 +645,11 @@ def build_settings_view(
             options = [
                 discord_mod.SelectOption(
                     label=ROUND_LABELS.get(cap, str(cap))[:100],
-                    description=f"{cap} tool rounds per turn" if cap else "No soft cap",
+                    description=(
+                        f"{cap} tool rounds per turn"
+                        if cap
+                        else "Use the bounded 250-round default"
+                    ),
                     value=str(cap),
                     default=(cap == current),
                 )

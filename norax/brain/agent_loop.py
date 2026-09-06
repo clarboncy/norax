@@ -19,7 +19,7 @@ This is the minimal OpenAI-style function-calling agent:
             return resp.content
 
 Limits:
-  - max_rounds (default 40): high-cap budget; emergency ceiling still prevents runaway loops
+  - max_rounds (default 250): high-cap budget; emergency ceiling still prevents runaway loops
   - per-tool timeout (handled inside the tool fns)
   - RiskGate: all calls checked against sender tier + danger patterns
   - loop_guard: detects repeated and ping-pong call patterns without blocking
@@ -148,8 +148,8 @@ def _is_model_failover_error(e: BaseException | None) -> bool:
 # round ceiling. "Unlimited" settings previously burned through paid
 # subscriptions in minutes — non-positive values now fall back to safe
 # defaults instead of disabling the guard.
-DEFAULT_MAX_ROUNDS = 150  # generous but bounded — prevents endless re-reading loops
-_FLOW_TIMEOUT_FALLBACK = 3600.0  # 60 minutes — complex tasks need room
+DEFAULT_MAX_ROUNDS = 250  # full-completion budget; anti-loop gates still stop unproductive work
+_FLOW_TIMEOUT_FALLBACK = 4 * 60 * 60.0  # 4 hours — enough wall time to use the round budget
 _MAX_FLOW_TIMEOUT_SECONDS = 24 * 60 * 60.0
 try:
     _flow_timeout_env = float(os.environ.get("NORAX_FLOW_TIMEOUT_SECONDS", "") or 0)
@@ -162,12 +162,15 @@ DEFAULT_TIMEOUT_SECONDS = (
 )
 # Hard emergency ceiling on LLM rounds per turn. Cannot be disabled: a
 # non-positive env value falls back to the default instead of removing the cap.
-# Keep a separate emergency ceiling above the normal per-turn budget.
+# Keep a non-disableable emergency ceiling at or above the normal per-turn budget.
+_HARD_ROUND_CAP_FALLBACK = 250
 try:
-    _hard_cap_env = int(os.environ.get("NORAX_AGENT_HARD_ROUND_CAP", "") or 200)
+    _hard_cap_env = int(
+        os.environ.get("NORAX_AGENT_HARD_ROUND_CAP", "") or _HARD_ROUND_CAP_FALLBACK
+    )
 except ValueError:
-    _hard_cap_env = 0
-HARD_ROUND_CAP = min(_hard_cap_env, 1_000) if _hard_cap_env > 0 else 80
+    _hard_cap_env = _HARD_ROUND_CAP_FALLBACK
+HARD_ROUND_CAP = min(_hard_cap_env, 1_000) if _hard_cap_env > 0 else _HARD_ROUND_CAP_FALLBACK
 # Best-of-N is disabled by default — it doubles inference time which is
 # painful on local models. Enable explicitly for cloud providers if needed.
 try:
@@ -182,11 +185,16 @@ CONSECUTIVE_FAIL_LIMIT = 3  # after N rounds where ALL tools fail, inject recove
 FINAL_VERIFICATION_NUDGE_LIMIT = 3
 NO_TOOL_STREAK_LIMIT = 4
 MAX_NO_TOOL_ROUNDS_TOTAL = 6
+_MAX_TOOL_CALLS_FALLBACK = 1_000
 try:
-    _max_tool_calls_env = int(os.environ.get("NORAX_AGENT_MAX_TOOL_CALLS", "200"))
+    _max_tool_calls_env = int(
+        os.environ.get("NORAX_AGENT_MAX_TOOL_CALLS", str(_MAX_TOOL_CALLS_FALLBACK))
+    )
 except ValueError:
-    _max_tool_calls_env = 200
-MAX_TOOL_CALLS_PER_TURN = _max_tool_calls_env if _max_tool_calls_env > 0 else 200
+    _max_tool_calls_env = _MAX_TOOL_CALLS_FALLBACK
+MAX_TOOL_CALLS_PER_TURN = (
+    _max_tool_calls_env if _max_tool_calls_env > 0 else _MAX_TOOL_CALLS_FALLBACK
+)
 NO_PROGRESS_ROUND_LIMIT = 4
 
 # Per-tool wall-clock ceilings. Applied on top of whatever the tool
@@ -203,7 +211,8 @@ TOOL_TIMEOUTS: dict[str, float] = {
     "write_chunk": 15.0,
     "edit": 20.0,
     # network
-    "web_fetch": 30.0,
+    # web_fetch: direct fetch (20s) + optional Firecrawl fallback (20s)
+    "web_fetch": 60.0,
     "web_search": 30.0,
     # deep_research runs a batch of searches + fetches internally; give it room
     "deep_research": 300.0,
@@ -246,6 +255,9 @@ def _current_turn_anchor(user_text: str, *, active_goal: str) -> str:
         "prior plans, and stale task state. Use older context only as supporting background.\n"
         "Do not resume an older task unless this request explicitly asks to continue it. "
         "Answer and act on the current situation first.\n"
+        "Follow the user's requested final-response format after verification; "
+        "examples and default recap guidance do not override it. "
+        "If work is incomplete, report the remaining work honestly.\n"
         f"ACTIVE_GOAL: {goal}\n"
         f"CURRENT_USER_REQUEST:\n{request}"
     )
@@ -1488,6 +1500,13 @@ async def run_agent_loop(
         metadata: dict[str, Any] = {}
         if reasoning_effort and reasoning_effort != "medium":
             metadata["reasoning_effort"] = reasoning_effort
+        elif reasoning_effort == "medium":
+            # llama.cpp servers ignore reasoning_effort; without an explicit
+            # effort the payload builder leaves thinking at the model default
+            # (xhigh), which burns the output budget on hidden reasoning.
+            # Medium is the runtime default — pass it through so the payload
+            # builder can map it to enable_thinking for llama.cpp endpoints.
+            metadata["reasoning_effort"] = "medium"
         if reasoning_output:
             metadata["reasoning_output"] = True
         return (
@@ -3128,7 +3147,6 @@ async def run_agent_loop(
         "failed": mutation_outcome.failed,
         "verified_after_last_mutation": mutation_outcome.verified_after_last_mutation,
     }
-
     verifier_score = ov_report.score if ov_report is not None else None
     if verifier_score is not None:
         final_resp.raw["output_verifier_score"] = round(verifier_score, 6)

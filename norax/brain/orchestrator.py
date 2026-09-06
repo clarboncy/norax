@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -67,8 +68,8 @@ EXECUTOR_PROVIDER = "ollama_direct"
 
 PLANNER_TIMEOUT = 120.0  # Composer thinking time
 EXECUTOR_TIMEOUT = 30.0  # Per-tool execution time
-MAX_ORCH_ROUNDS = 24  # Default when runtime cap is unlimited (0)
-HARD_ORCH_ROUND_CAP = 48  # Absolute safety ceiling
+MAX_ORCH_ROUNDS = 250  # Full-completion default, including runtime auto (0)
+HARD_ORCH_ROUND_CAP = 250
 _PLANNER_FAILOVER_HTTP_STATUSES = frozenset({401, 404, 408, 409, 425, 429, 500, 502, 503, 504})
 
 # ── Tool result compression ────────────────────────────────────────────────
@@ -140,6 +141,54 @@ class Orchestrator:
         on_delta: Any | None = None,
         max_rounds: int = MAX_ORCH_ROUNDS,
         planner_model: str | None = None,
+        prior_messages: list[dict] | None = None,
+        timeout_seconds: float | None = None,
+    ) -> OrchestratorRunResult:
+        """Run the planner within the same wall-clock budget as direct turns."""
+        from .agent_loop import DEFAULT_TIMEOUT_SECONDS
+
+        budget = timeout_seconds if timeout_seconds is not None else DEFAULT_TIMEOUT_SECONDS
+        if isinstance(budget, bool) or not math.isfinite(budget) or budget <= 0:
+            budget = DEFAULT_TIMEOUT_SECONDS
+        self._active_trace: list[dict] = []
+        self._active_rounds = 0
+        timer = asyncio.timeout(min(budget, 86_400))
+        try:
+            async with timer:
+                return await self._run(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    allowed_tools=allowed_tools,
+                    sender_tier=sender_tier,
+                    event_log=event_log,
+                    on_delta=on_delta,
+                    max_rounds=max_rounds,
+                    planner_model=planner_model,
+                    prior_messages=prior_messages,
+                )
+        except TimeoutError:
+            if not timer.expired():
+                raise
+            return self._finalize_run(
+                content="The task reached its wall-clock budget; completion is not verified.",
+                trace=self._active_trace,
+                rounds=self._active_rounds,
+                user_prompt=user_prompt,
+                completion_signal="flow_timeout",
+            )
+
+    async def _run(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        allowed_tools: list[str],
+        sender_tier: str,
+        event_log: Any | None = None,
+        on_delta: Any | None = None,
+        max_rounds: int = MAX_ORCH_ROUNDS,
+        planner_model: str | None = None,
+        prior_messages: list[dict] | None = None,
     ) -> OrchestratorRunResult:
         """Run hybrid orchestration loop.
 
@@ -147,7 +196,7 @@ class Orchestrator:
         compatibility, while carrying explicit completion evidence for callers
         that persist checkpoints or produce training labels.
         """
-        trace: list[dict] = []
+        trace = self._active_trace
         rounds = 0
         self._planner_model = resolve_planner_model(planner_model or PLANNER_MODEL)
         round_cap = self._resolve_round_cap(max_rounds)
@@ -171,11 +220,15 @@ class Orchestrator:
                 "role": "system",
                 "content": f"{system_prompt}\n\n{scaffold}\n\n{orch_scaffold}",
             },
-            {"role": "user", "content": user_prompt},
         ]
+        composer_messages.extend(
+            dict(message) for message in (prior_messages or []) if message.get("role") != "system"
+        )
+        composer_messages.append({"role": "user", "content": user_prompt})
 
         while rounds < round_cap:
             rounds += 1
+            self._active_rounds = rounds
 
             # ── Phase 1: Planner plans (Opus/Composer → text CoT, no native tools) ──
             plan = await self._call_planner(composer_messages, allowed_tools)
