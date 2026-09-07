@@ -98,6 +98,14 @@ No new comparative benchmarks were run during this final audit pass.
   scores and rows cannot poison valid retrievals; backend failures are returned
   as bounded, secret-scrubbed diagnostics. The healthy retrieval path does not
   add another model call or materialize a second result collection.
+- Search providers cannot report success after every returned item fails URL and
+  shape validation. Provider exceptions are bounded and secret-scrubbed, disk
+  cache hits honor the same in-memory LRU ceiling as live results, and pooled
+  HTTP clients are closed after active turns drain during graceful shutdown.
+- Chunked file writes and memory appends run off the event loop, serialize whole
+  records under per-path locks, and create new files with private permissions.
+  Chunk receipts report actual UTF-8 bytes, while initial chunk writes retain
+  atomic replacement semantics.
 - Research persistence and returned connector errors are bounded and
   secret-scrubbed. Research memory is written privately and atomically, cannot
   traverse outside its intel directory, and never erases existing knowledge on
@@ -110,9 +118,9 @@ No new comparative benchmarks were run during this final audit pass.
 
 `scripts/quality_gate.py` passed on the current source:
 
-- 2,263 tests in the branch-coverage selection, plus three isolated subprocess
+- 2,268 tests in the branch-coverage selection, plus three isolated subprocess
   acceptance tests; 10 desktop-affecting host tests were intentionally excluded.
-- 79.06% statement coverage, 68.18% branch coverage, 76.19% combined coverage;
+- 79.14% statement coverage, 68.26% branch coverage, 76.27% combined coverage;
   all 46 critical-module floors passed. The aggregate release floors remain
   ratcheted to 77% statements, 65% branches, and 74% combined.
 - Twenty-seven focused production modules now have enforced 100% statement and

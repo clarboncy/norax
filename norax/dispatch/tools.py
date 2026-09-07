@@ -986,6 +986,17 @@ def _shared_http_client() -> httpx.AsyncClient:
     return client
 
 
+async def close_shared_http_clients() -> None:
+    """Close pooled web clients after active turns have drained."""
+    clients = list(_HTTP_CLIENTS.values())
+    _HTTP_CLIENTS.clear()
+    if clients:
+        await asyncio.gather(
+            *(client.aclose() for client in clients if not client.is_closed),
+            return_exceptions=True,
+        )
+
+
 @asynccontextmanager
 async def _shared_client_cm() -> AsyncIterator[httpx.AsyncClient]:
     """Yield the shared pooled client inside an ``async with``.
@@ -1504,6 +1515,8 @@ async def t_web_search(
         result["cached"] = True
         _WEB_SEARCH_CACHE[cache_key] = (time.monotonic(), copy.deepcopy(disk_payload))
         _WEB_SEARCH_CACHE.move_to_end(cache_key)
+        while len(_WEB_SEARCH_CACHE) > _WEB_SEARCH_CACHE_MAX:
+            _WEB_SEARCH_CACHE.popitem(last=False)
         return result
 
     errors: list[str] = []
@@ -1532,8 +1545,8 @@ async def t_web_search(
                 engines.extend(sx_engines)
                 backends.add("searxng")
                 tr_used = tr
-            except Exception as e:
-                local_errors.append(str(e))
+            except Exception as exc:
+                local_errors.append(f"searxng: {_tool_diagnostic(exc)}")
 
         async def _try_serper() -> None:
             if not serper_key:
@@ -1542,8 +1555,8 @@ async def t_web_search(
                 ranked.append(await _fetch_serper(q, count, serper_key))
                 engines.append("serper")
                 backends.add("serper")
-            except Exception as e:
-                local_errors.append(str(e))
+            except Exception as exc:
+                local_errors.append(f"serper: {_tool_diagnostic(exc)}")
 
         await asyncio.gather(_try_searxng(), _try_serper())
         return ranked, engines, backends, tr_used, local_errors
@@ -1591,24 +1604,25 @@ async def t_web_search(
                         _rrf_merge(ranked, limit=count * 2),
                         count=count,
                     )
-                    payload = {
-                        "ok": True,
-                        "provider": _search_provider_label(backends),
-                        "query": normalized_query,
-                        "engines": sorted(set(engines)),
-                        "items": merged,
-                    }
-                    if tr:
-                        payload["time_range"] = tr
-                    return payload, tier_errors
+                    if merged:
+                        payload = {
+                            "ok": True,
+                            "provider": _search_provider_label(backends),
+                            "query": normalized_query,
+                            "engines": sorted(set(engines)),
+                            "items": merged,
+                        }
+                        if tr:
+                            payload["time_range"] = tr
+                        return payload, tier_errors
                 if not sub_errors:
-                    tier_errors.append("searxng: no results")
+                    tier_errors.append("searxng: no usable results")
         except httpx.ConnectError:
             tier_errors.append("searxng: connection refused (is the container running?)")
         except httpx.TimeoutException:
             tier_errors.append("searxng: timeout")
         except Exception as exc:
-            tier_errors.append(f"searxng: {type(exc).__name__}: {exc}")
+            tier_errors.append(f"searxng: {type(exc).__name__}: {_tool_diagnostic(exc)}")
         return None, tier_errors
 
     tier_one_task = asyncio.create_task(_tier_one_search())
@@ -1629,12 +1643,14 @@ async def t_web_search(
             if tavily_task is not None and tavily_task in done:
                 tavily_result = await tavily_task
                 if tavily_result and tavily_result.get("items"):
-                    tavily_result["items"] = _finalize_search_items(
+                    finalized_items = _finalize_search_items(
                         tavily_result["items"],
                         count=count,
                     )
-                    _cache_put_search(cache_key, tavily_result)
-                    return tavily_result
+                    if finalized_items:
+                        tavily_result["items"] = finalized_items
+                        _cache_put_search(cache_key, tavily_result)
+                        return tavily_result
                 errors.append("tavily: no result")
 
             if tier_one_task in done:
@@ -1741,21 +1757,30 @@ async def t_write_chunk(
     if mode not in ("start", "append"):
         return {"ok": False, "error": f"invalid mode: {mode} (use start|append)"}
     p = Path(path).expanduser()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    if mode == "start":
-        p.write_text(content, encoding="utf-8")
-    else:
-        with p.open("a", encoding="utf-8") as f:
-            f.write(content)
+    total = await asyncio.to_thread(_write_user_chunk, p, content, mode)
     _invalidate_read_cache(p)
-    total = p.stat().st_size
     return {
         "ok": True,
         "path": str(p),
-        "chunk_bytes": len(content),
+        "chunk_bytes": len(content.encode("utf-8")),
         "total_bytes": total,
         "final": final,
     }
+
+
+def _write_user_chunk(path: Path, content: str, mode: str) -> int:
+    """Serialize whole chunks and keep newly created user files private."""
+    target = path.resolve()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with path_lock(target):
+        if mode == "start":
+            _write_user_text(target, content)
+        else:
+            flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
+            descriptor = os.open(target, flags, 0o600)
+            with os.fdopen(descriptor, "a", encoding="utf-8") as handle:
+                handle.write(content)
+        return target.stat().st_size
 
 
 async def t_edit(*, path: str, old: str, new: str) -> dict:
@@ -1809,10 +1834,19 @@ def _edit_user_text(*, path: str, old: str, new: str) -> dict:
 
 async def t_append_memory(*, path: str, text: str) -> dict:
     p = Path(path).expanduser()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    with p.open("a", encoding="utf-8") as f:
-        f.write(text.rstrip() + "\n")
+    await asyncio.to_thread(_append_user_memory, p, text)
     return {"ok": True, "path": str(p)}
+
+
+def _append_user_memory(path: Path, text: str) -> None:
+    """Append one complete private memory record under a per-path lock."""
+    target = path.resolve()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with path_lock(target):
+        flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
+        descriptor = os.open(target, flags, 0o600)
+        with os.fdopen(descriptor, "a", encoding="utf-8") as handle:
+            handle.write(text.rstrip() + "\n")
 
 
 async def t_message_send(

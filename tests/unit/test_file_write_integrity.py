@@ -1,4 +1,5 @@
 import asyncio
+import stat
 
 import pytest
 
@@ -84,3 +85,36 @@ async def test_concurrent_edits_preserve_both_changes(tmp_path):
     assert all(result["ok"] is True for result in results)
     assert target.read_text() == "café done"
     assert results[0]["diff_bytes"] == 0
+
+
+@pytest.mark.asyncio
+async def test_chunked_write_is_private_serialized_and_reports_utf8_bytes(tmp_path):
+    target = tmp_path / "nested" / "document"
+    started = await tools.t_write_chunk(
+        path=str(target),
+        content="café",
+        mode="start",
+    )
+    appended = await tools.t_write_chunk(
+        path=str(target),
+        content=" done",
+        mode="append",
+        final=True,
+    )
+    assert started["chunk_bytes"] == 5
+    assert started["total_bytes"] == 5
+    assert appended["chunk_bytes"] == 5
+    assert appended["total_bytes"] == 10
+    assert appended["final"] is True
+    assert target.read_text() == "café done"
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
+
+@pytest.mark.asyncio
+async def test_concurrent_memory_appends_are_complete_and_private(tmp_path):
+    target = tmp_path / "memory" / "notes.md"
+    await asyncio.gather(
+        *(tools.t_append_memory(path=str(target), text=f" record-{index}  ") for index in range(20))
+    )
+    assert set(target.read_text().splitlines()) == {f" record-{index}" for index in range(20)}
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600

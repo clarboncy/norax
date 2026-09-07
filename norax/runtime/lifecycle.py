@@ -478,6 +478,12 @@ class LifecycleMixin(RuntimeAccessMixin):
                     except Exception:  # noqa: BLE001
                         log.debug("embedder.close_failed", exc_info=True)
             try:
+                from ..dispatch.tools import close_shared_http_clients
+
+                await close_shared_http_clients()
+            except Exception:  # noqa: BLE001
+                log.debug("web_clients.close_failed", exc_info=True)
+            try:
                 await self.gateway.aclose()
             except Exception:  # noqa: BLE001
                 log.warning("gateway.shutdown_failed", exc_info=True)

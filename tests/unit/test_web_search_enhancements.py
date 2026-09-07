@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from typing import Any, cast
 
 import pytest
 
@@ -88,6 +89,95 @@ async def test_serper_only_result_is_attributed_to_serper(monkeypatch) -> None:
 
     assert result["ok"] is True
     assert result["provider"] == "serper"
+
+
+@pytest.mark.asyncio
+async def test_search_rejects_malformed_provider_items_as_success(monkeypatch) -> None:
+    monkeypatch.setenv("NORAX_TAVILY_API_KEY", "test-key")
+    monkeypatch.delenv("NORAX_SERPER_API_KEY", raising=False)
+    _WEB_SEARCH_CACHE.clear()
+    monkeypatch.setattr(tools_module, "_disk_cache_get", lambda *_a, **_k: None)
+
+    async def _malformed_tavily(*_args, **_kwargs):
+        return {
+            "ok": True,
+            "provider": "tavily",
+            "query": "malformed provider query",
+            "items": [{"url": "javascript:alert(1)", "title": "bad"}],
+        }
+
+    async def _malformed_searx(*_args, **_kwargs):
+        return ([{"url": "file:///secret", "title": "bad"}], ["bad"], None)
+
+    monkeypatch.setattr(tools_module, "_tavily_search", _malformed_tavily)
+    monkeypatch.setattr(tools_module, "_fetch_searxng", _malformed_searx)
+    result = await t_web_search(query="malformed provider query", count=3)
+    assert result["ok"] is False
+    assert result["error"] == "all_search_providers_failed"
+    assert result["tried"] == [
+        "tavily: no result",
+        "searxng: no usable results",
+        "serper: no API key configured",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_search_scrubs_provider_errors_and_bounds_disk_hit_lru(monkeypatch) -> None:
+    monkeypatch.delenv("NORAX_TAVILY_API_KEY", raising=False)
+    monkeypatch.delenv("NORAX_SERPER_API_KEY", raising=False)
+    _WEB_SEARCH_CACHE.clear()
+    secret = "sk-" + "x" * 30
+
+    async def _failed_searx(*_args, **_kwargs):
+        raise RuntimeError(secret + "z" * 1_000)
+
+    monkeypatch.setattr(tools_module, "_disk_cache_get", lambda *_a, **_k: None)
+    monkeypatch.setattr(tools_module, "_fetch_searxng", _failed_searx)
+    failed = await t_web_search(query="redacted search failure", count=3)
+    assert secret not in str(failed)
+    assert "<REDACTED:openai_key>" in str(failed)
+    assert max(map(len, failed["tried"])) <= 520
+
+    payload = {
+        "ok": True,
+        "provider": "searxng",
+        "query": "disk hit query",
+        "items": [{"url": "https://example.test/a", "title": "a", "snippet": "a"}],
+    }
+    monkeypatch.setattr(tools_module, "_WEB_SEARCH_CACHE_MAX", 1)
+    _WEB_SEARCH_CACHE[("old", 1, 0)] = (time.monotonic(), payload)
+    monkeypatch.setattr(tools_module, "_disk_cache_get", lambda *_a, **_k: payload)
+    cached = await t_web_search(query="disk hit query", count=3)
+    assert cached["cached"] is True
+    assert len(_WEB_SEARCH_CACHE) == 1
+    assert ("old", 1, 0) not in _WEB_SEARCH_CACHE
+
+
+@pytest.mark.asyncio
+async def test_shared_web_clients_close_and_registry_clears() -> None:
+    closed: list[str] = []
+
+    class Client:
+        def __init__(self, name: str, *, is_closed: bool = False) -> None:
+            self.name = name
+            self.is_closed = is_closed
+
+        async def aclose(self) -> None:
+            closed.append(self.name)
+
+    tools_module._HTTP_CLIENTS.clear()
+    tools_module._HTTP_CLIENTS.update(
+        cast(
+            dict[int, Any],
+            {
+                1: Client("open"),
+                2: Client("closed", is_closed=True),
+            },
+        )
+    )
+    await tools_module.close_shared_http_clients()
+    assert closed == ["open"]
+    assert tools_module._HTTP_CLIENTS == {}
 
 
 @pytest.mark.asyncio
