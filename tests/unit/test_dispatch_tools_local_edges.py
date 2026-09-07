@@ -80,6 +80,45 @@ async def test_read_and_list_stat_failures_are_structured_and_scrubbed(
     assert read_result["detail"] == "<REDACTED:openai_key>"
 
 
+@pytest.mark.asyncio
+async def test_read_bounds_pathological_lines_and_total_page_text(tmp_path: Path) -> None:
+    long_line = tmp_path / "long-line.txt"
+    long_line.write_text("x" * (tools._READ_MAX_LINE_CHARS + 1))
+    line_result = await tools.t_read(path=str(long_line), limit=1)
+    assert line_result["ok"] is True
+    assert len(line_result["content"]) == tools._READ_MAX_LINE_CHARS
+    assert line_result["line_truncated_at"] == 0
+    assert line_result["line_char_limit"] == tools._READ_MAX_LINE_CHARS
+    assert line_result["truncated"] is True
+    assert "next_offset" not in line_result
+
+    bounded_page = tmp_path / "bounded-page.txt"
+    line = "y" * (tools._READ_MAX_LINE_CHARS - 1)
+    bounded_page.write_text("\n".join([line] * 20))
+    page_result = await tools.t_read(path=str(bounded_page), limit=20)
+    assert page_result["ok"] is True
+    assert len(page_result["content"]) <= tools._READ_MAX_PAGE_CHARS
+    assert page_result["page_char_limit"] == tools._READ_MAX_PAGE_CHARS
+    assert page_result["truncated"] is True
+    assert page_result["next_offset"] == len(page_result["content"].splitlines())
+
+
+@pytest.mark.asyncio
+async def test_read_contains_race_or_permission_failure(tmp_path: Path, monkeypatch) -> None:
+    target = tmp_path / "target.txt"
+    target.write_text("content")
+    secret = "sk-" + "r" * 30
+
+    def fail(*_args: Any, **_kwargs: Any):
+        raise OSError(secret)
+
+    monkeypatch.setattr(tools, "_read_text_page", fail)
+    result = await tools.t_read(path=str(target))
+    assert result["error"] == "file_read_failed"
+    assert secret not in result["detail"]
+    assert result["detail"] == "<REDACTED:openai_key>"
+
+
 @pytest.mark.parametrize(
     ("value", "default", "expected"),
     [

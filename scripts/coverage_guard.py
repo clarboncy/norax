@@ -31,6 +31,7 @@ DEFAULT_CRITICAL_FLOORS: Final[dict[str, tuple[float, float]]] = {
     "norax/dispatch/firecrawl.py": (100.0, 100.0),
     "norax/dispatch/idempotency.py": (100.0, 100.0),
     "norax/dispatch/input_coercion.py": (100.0, 100.0),
+    "norax/dispatch/memory_tool.py": (100.0, 100.0),
     "norax/dispatch/risk.py": (91.0, 87.0),
     "norax/dispatch/web_common.py": (100.0, 100.0),
     "norax/gateway_client/__init__.py": (78.0, 67.0),

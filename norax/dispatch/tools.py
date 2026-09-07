@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import inspect
 import json
 import logging
 import math
@@ -71,6 +70,8 @@ from .firecrawl import (
 )
 from .input_coercion import _coerce_float as _coerce_float
 from .input_coercion import _coerce_int as _coerce_int
+from .memory_tool import bind_memory_search as bind_memory_search
+from .memory_tool import t_search_memory as t_search_memory
 from .repo_explorer import explore_repo
 from .router import normalize_tool_name as normalize_tool_name  # re-exported for callers
 from .sandbox import t_sandbox_exec
@@ -120,6 +121,8 @@ _READ_AUTO_PAGE_BYTES = 200_000
 _READ_EXACT_LINE_COUNT_MAX_BYTES = 8_000_000
 _READ_OFFLOAD_BYTES = 1_000_000
 _READ_MAX_PAGE_LINES = 20_000
+_READ_MAX_LINE_CHARS = 64_000
+_READ_MAX_PAGE_CHARS = 1_000_000
 _LIST_DIR_DEFAULT_LIMIT = 500
 _LIST_DIR_MAX_LIMIT = 2_000
 _LIST_DIR_SCAN_LIMIT = 20_000
@@ -131,30 +134,62 @@ def _read_text_page(
     offset: int,
     limit: int | None,
     count_to_eof: bool,
-) -> tuple[list[str], int | None, int | None, bool]:
+) -> tuple[list[str], int | None, int | None, bool, int | None, bool]:
     """Read one text page without scanning large files past the requested data."""
     if limit is None:
         text = path.read_text(encoding="utf-8", errors="replace")
         full_lines = text.splitlines()
-        return full_lines, len(full_lines), None, False
+        return full_lines, len(full_lines), None, False, None, False
 
     page_lines: list[str] = []
     observed_lines = 0
     has_more = False
+    line_truncated_at: int | None = None
+    page_char_limit_reached = False
+    page_chars = 0
     end = offset + limit
     with path.open("r", encoding="utf-8", errors="replace") as handle:
-        for index, line in enumerate(handle):
+        index = 0
+        while True:
+            line = handle.readline(_READ_MAX_LINE_CHARS + 1)
+            if not line:
+                break
             observed_lines = index + 1
+            line_too_long = len(line) > _READ_MAX_LINE_CHARS and not line.endswith("\n")
             if offset <= index < end:
-                page_lines.append(line.rstrip("\r\n"))
+                clean_line = line[:_READ_MAX_LINE_CHARS].rstrip("\r\n")
+                separator_chars = 1 if page_lines else 0
+                if page_chars + separator_chars + len(clean_line) > _READ_MAX_PAGE_CHARS:
+                    has_more = True
+                    page_char_limit_reached = True
+                    break
+                page_lines.append(clean_line)
+                page_chars += separator_chars + len(clean_line)
+            if line_too_long:
+                line_truncated_at = index
+                break
+            if page_chars >= _READ_MAX_PAGE_CHARS:
+                has_more = bool(handle.read(1))
+                page_char_limit_reached = has_more
+                break
             elif index >= end:
                 has_more = True
                 if not count_to_eof:
                     break
+            index += 1
 
-    total_lines = observed_lines if count_to_eof or not has_more else None
+    total_lines = (
+        observed_lines if line_truncated_at is None and (count_to_eof or not has_more) else None
+    )
     total_lines_at_least = observed_lines if total_lines is None else None
-    return page_lines, total_lines, total_lines_at_least, has_more
+    return (
+        page_lines,
+        total_lines,
+        total_lines_at_least,
+        has_more,
+        line_truncated_at,
+        page_char_limit_reached,
+    )
 
 
 def _tool_diagnostic(value: object, *, max_chars: int = 500) -> str:
@@ -231,21 +266,30 @@ async def t_read(
         limit = 2000
         auto_paginated = True
     count_to_eof = size <= _READ_EXACT_LINE_COUNT_MAX_BYTES
-    if size > _READ_OFFLOAD_BYTES:
-        lines, total, total_at_least, has_more = await asyncio.to_thread(
-            _read_text_page,
-            p,
-            offset=offset,
-            limit=limit,
-            count_to_eof=count_to_eof,
-        )
-    else:
-        lines, total, total_at_least, has_more = _read_text_page(
-            p,
-            offset=offset,
-            limit=limit,
-            count_to_eof=count_to_eof,
-        )
+    try:
+        if size > _READ_OFFLOAD_BYTES:
+            page = await asyncio.to_thread(
+                _read_text_page,
+                p,
+                offset=offset,
+                limit=limit,
+                count_to_eof=count_to_eof,
+            )
+        else:
+            page = _read_text_page(
+                p,
+                offset=offset,
+                limit=limit,
+                count_to_eof=count_to_eof,
+            )
+    except OSError as exc:
+        return {
+            "ok": False,
+            "error": "file_read_failed",
+            "path": str(p),
+            "detail": _tool_diagnostic(exc),
+        }
+    lines, total, total_at_least, has_more, line_truncated_at, page_char_limit_reached = page
     out = {
         "ok": True,
         "path": str(p),
@@ -254,6 +298,17 @@ async def t_read(
     }
     if total_at_least is not None:
         out["total_lines_at_least"] = total_at_least
+    if line_truncated_at is not None:
+        out.update(
+            {
+                "truncated": True,
+                "line_truncated_at": line_truncated_at,
+                "line_char_limit": _READ_MAX_LINE_CHARS,
+                "suggestion": "Use exec with a byte-oriented tool to inspect the remainder of this unusually long line.",
+            }
+        )
+    if page_char_limit_reached:
+        out["page_char_limit"] = _READ_MAX_PAGE_CHARS
     if limit is not None and (has_more or (total is not None and offset + len(lines) < total)):
         out.update(
             {
@@ -1604,40 +1659,6 @@ async def t_web_search(
         "query": normalized_query,
         "tried": errors,
     }
-
-
-# Memory search — wired at runtime via bind_memory_search()
-_MEMORY_SEARCH_FN = None
-
-
-async def t_search_memory(*, query: str, k: int = 5) -> dict:
-    """Search semantic memory. Returns top-k results."""
-    if _MEMORY_SEARCH_FN is None:
-        return {"ok": True, "query": query, "items": [], "note": "memory store not initialized"}
-    try:
-        results = _MEMORY_SEARCH_FN(query, k=k)
-        if inspect.isawaitable(results):
-            results = await results
-        items = []
-        for row in results:
-            if isinstance(row, tuple) and len(row) >= 2:
-                n, score = row[0], row[1]
-                source = row[2] if len(row) >= 3 else ""
-                text = getattr(n, "text", str(n))
-                kind = getattr(n, "kind", "")
-                item = {"text": text, "score": round(float(score), 3), "kind": kind}
-                if source:
-                    item["signals"] = source
-                items.append(item)
-        return {"ok": True, "query": query, "items": items}
-    except Exception as e:
-        return {"ok": False, "error": str(e), "query": query}
-
-
-def bind_memory_search(search_fn) -> None:
-    """Bind a live memory search function. Called by Runtime.build()."""
-    global _MEMORY_SEARCH_FN
-    _MEMORY_SEARCH_FN = search_fn
 
 
 # Runtime info is patched in by Runtime.build() via bind_status_info().  A

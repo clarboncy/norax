@@ -89,8 +89,15 @@ No new comparative benchmarks were run during this final audit pass.
   secret-scrubbed before entering model context.
 - Local reads reject directories and non-regular streams, contain stat and scan
   failures, cap explicit page requests at 20,000 lines, and retain bounded LRU
-  behavior. Directory scans and diagnostics stay finite without adding work to
-  the normal small-file path.
+  behavior. Independent per-line and per-page text ceilings prevent minified or
+  pathological files from flooding memory and model context while returning
+  explicit truncation metadata. Directory scans and diagnostics stay finite
+  without adding work to the normal small-file path.
+- Semantic-memory tool results are bounded across query size, requested count,
+  malformed-row scanning, per-item text, and aggregate returned context. Invalid
+  scores and rows cannot poison valid retrievals; backend failures are returned
+  as bounded, secret-scrubbed diagnostics. The healthy retrieval path does not
+  add another model call or materialize a second result collection.
 - Research persistence and returned connector errors are bounded and
   secret-scrubbed. Research memory is written privately and atomically, cannot
   traverse outside its intel directory, and never erases existing knowledge on
@@ -103,17 +110,17 @@ No new comparative benchmarks were run during this final audit pass.
 
 `scripts/quality_gate.py` passed on the current source:
 
-- 2,255 tests in the branch-coverage selection, plus three isolated subprocess
+- 2,263 tests in the branch-coverage selection, plus three isolated subprocess
   acceptance tests; 10 desktop-affecting host tests were intentionally excluded.
-- 78.96% statement coverage, 68.06% branch coverage, 76.08% combined coverage;
-  all 45 critical-module floors passed. The aggregate release floors remain
+- 79.06% statement coverage, 68.18% branch coverage, 76.19% combined coverage;
+  all 46 critical-module floors passed. The aggregate release floors remain
   ratcheted to 77% statements, 65% branches, and 74% combined.
-- Twenty-six focused production modules now have enforced 100% statement and
+- Twenty-seven focused production modules now have enforced 100% statement and
   branch coverage, including deep research, prompt assembly, model management,
   session, delivery, history, runtime validation, capability state, health,
   retry, circuit-breaker, watchdog, operations, cognition, Firecrawl, input
-  coercion, and outbound web-safety boundaries. The aggregate is not described
-  as 100%; uncovered behavior remains audit work.
+  coercion, outbound web-safety, and semantic-memory tool boundaries. The
+  aggregate is not described as 100%; uncovered behavior remains audit work.
 - Lockfile, systemd units, every shell helper, Ruff lint/format, mypy,
   compilation, stack boundaries, publication hygiene, and secret scanning.
 - Real loopback connector transport tests include concurrent MCP calls,
