@@ -34,6 +34,24 @@ UNTRUSTED_WRAP = (
     "---\n{body}\n"
     "<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>"
 )
+_EXTERNAL_MEMORY_KINDS = frozenset({"external", "intel", "sleep"})
+
+
+def _escaped_external_text(value: object) -> str:
+    """Prevent untrusted text from forging the prompt's fence delimiters."""
+    return str(value).replace("<<<", "‹‹‹").replace(">>>", "›››")
+
+
+def _external_source(value: object) -> str:
+    """Render a bounded, single-line source label inside an untrusted fence."""
+    return " ".join(_escaped_external_text(value).split())[:128] or "unknown"
+
+
+def _untrusted_block(source: object, body: object) -> str:
+    return UNTRUSTED_WRAP.format(
+        src=_external_source(source),
+        body=_escaped_external_text(body),
+    )
 
 
 @dataclass
@@ -67,10 +85,14 @@ def _block_memory(ctx: BrainContext) -> str:
             first, score = item[0], item[1]
             kind = ""
         text = getattr(first, "text", first)
-        kind = kind or getattr(first, "kind", "")
+        kind = str(kind or getattr(first, "kind", "")).strip().casefold()[:32]
         safe = str(text).replace("\n", " ")[:240]
         tag = f";kind={kind}" if kind else ""
-        lines.append(f"  [{float(score):.2f}{tag}] {safe}")
+        rendered = f"[{float(score):.2f}{tag}] {safe}"
+        if kind in _EXTERNAL_MEMORY_KINDS:
+            lines.append(_untrusted_block(f"memory:{kind}", rendered))
+        else:
+            lines.append(f"  {rendered}")
     return "\n".join(lines)
 
 
@@ -143,10 +165,9 @@ def _render_user_message(env: SensoryInput):
     Non-image attachments are surfaced as a small text block so the
     model at least knows they exist and can web_fetch them if needed.
     """
-    text = env.body if env.trusted else UNTRUSTED_WRAP.format(src=env.source, body=env.body)
     atts = env.attachments or []
     if not atts:
-        return text
+        return env.body if env.trusted else _untrusted_block(env.source, env.body)
 
     images: list[dict] = []
     non_image_lines: list[str] = []
@@ -162,12 +183,21 @@ def _render_user_message(env: SensoryInput):
                 f"- {fname or 'file'} ({ctype or 'unknown'}, {size} bytes): {url}"
             )
 
+    attachment_manifest = ""
     if non_image_lines:
-        text = (
-            (text or "")
-            + "\n\nATTACHMENTS (use web_fetch if you need to read these):\n"
-            + "\n".join(non_image_lines)
+        attachment_manifest = "ATTACHMENTS (metadata only; use web_fetch if needed):\n" + "\n".join(
+            non_image_lines
         )
+
+    if env.trusted:
+        text = env.body
+        if attachment_manifest:
+            text = (text or "") + "\n\n" + _untrusted_block("attachments", attachment_manifest)
+    else:
+        combined = env.body
+        if attachment_manifest:
+            combined = (combined or "") + "\n\n" + attachment_manifest
+        text = _untrusted_block(env.source, combined)
 
     # If we have images, emit a multimodal parts list. Otherwise plain text.
     if images:

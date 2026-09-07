@@ -7,7 +7,7 @@ import pytest
 
 import norax.dispatch.idempotency as idempotency_module
 from norax.dispatch import Caller, Dispatcher
-from norax.dispatch.idempotency import IdempotencyCache
+from norax.dispatch.idempotency import IdempotencyCache, IdempotencyConflict
 from norax.dispatch.tools import REGISTRY, ToolSpec
 
 
@@ -57,6 +57,16 @@ def test_lookup_does_not_sweep_unrelated_cache_entries() -> None:
 
     cache._store = NoGlobalSweep(cache._store)
     assert cache.get("3", scope="same") == {"index": 3}
+
+
+def test_put_is_first_writer_wins_and_rejects_cross_scope_reuse() -> None:
+    cache = IdempotencyCache()
+    cache.put("request", {"ok": True, "writer": "first"}, scope="operation-a")
+    cache.put("request", {"ok": True, "writer": "second"}, scope="operation-a")
+
+    assert cache.get("request", scope="operation-a") == {"ok": True, "writer": "first"}
+    with pytest.raises(IdempotencyConflict, match="different operation"):
+        cache.put("request", {"ok": True}, scope="operation-b")
 
 
 @pytest.mark.asyncio

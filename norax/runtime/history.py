@@ -17,25 +17,33 @@ def _coerce_tool_args_json(content: object) -> str:
     """
     import json as _json
 
+    def encode(value: object) -> str:
+        try:
+            return _json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+        except (OverflowError, RecursionError, TypeError, ValueError):
+            return "{}"
+
     if content is None:
         return "{}"
     if isinstance(content, (dict, list)):
-        try:
-            return _json.dumps(content if isinstance(content, dict) else {"_raw": content})
-        except Exception:  # noqa: BLE001
-            return "{}"
-    s = str(content).strip()
+        return encode(content if isinstance(content, dict) else {"_raw": content})
+    try:
+        s = str(content).strip()
+    except Exception:  # noqa: BLE001
+        return "{}"
     if not s:
         return "{}"
     try:
         parsed = _json.loads(s)
     except Exception:  # noqa: BLE001
         # Non-JSON text args -> wrap so it stays a valid JSON object
-        return _json.dumps({"_raw": s})
+        return encode({"_raw": s})
     if isinstance(parsed, dict):
-        return s
+        # Re-encoding rejects Python's non-standard NaN/Infinity extensions
+        # and compacts arguments before they consume provider context.
+        return encode(parsed)
     # Valid JSON but not an object (e.g. null, [], "str") -> wrap
-    return _json.dumps({"_raw": parsed})
+    return encode({"_raw": parsed})
 
 
 def _bounded_history_text(content: str, max_chars: int) -> str:
@@ -48,10 +56,10 @@ def _bounded_history_text(content: str, max_chars: int) -> str:
     marker = f"\n...[historical message truncated; {len(text)} chars total]...\n"
     if max_chars <= len(marker):
         return text[:max_chars]
-    available = max(0, max_chars - len(marker))
+    available = max_chars - len(marker)
     head = available // 2
     tail = available - head
-    return text[:head] + marker + (text[-tail:] if tail else "")
+    return text[:head] + marker + text[-tail:]
 
 
 def _clean_historical_assistant_text(content: str) -> str:
@@ -60,9 +68,13 @@ def _clean_historical_assistant_text(content: str) -> str:
 
     text = strip_reasoning_blocks(str(content or ""))
     lines = text.lstrip().splitlines()
-    while lines and (not lines[0].strip() or re.match(r"^(?:GOAL|PLAN|RISK):", lines[0].strip())):
-        lines.pop(0)
-    return "\n".join(lines).strip()
+    first_content = 0
+    while first_content < len(lines) and (
+        not lines[first_content].strip()
+        or re.match(r"^(?:GOAL|PLAN|RISK):", lines[first_content].strip())
+    ):
+        first_content += 1
+    return "\n".join(lines[first_content:]).strip()
 
 
 def _history_turn_limit(user_prompt: str) -> int:
@@ -187,11 +199,12 @@ def _select_history_tail(
         while valid_calls_by_turn[latest] and turn_cost(latest) > token_budget:
             valid_calls_by_turn[latest].pop(0)
         if turn_cost(latest) > token_budget:
+            # Once all removable tool pairs are gone, any remaining cost comes
+            # from at least one user/assistant text frame.
             text_frames = sum(
                 frame.kind not in {"tool_call", "tool_result"} for frame in by_turn[latest]
             )
-            if text_frames:
-                text_cap_tokens = max(1, token_budget // text_frames - 32)
+            text_cap_tokens = max(1, token_budget // text_frames - 32)
 
     selected_turns: set[int] = set()
     remaining = max(0, token_budget)

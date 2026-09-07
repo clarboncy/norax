@@ -198,17 +198,24 @@ def test_default_critical_policy_covers_runtime_and_external_protocol_boundaries
     assert critical["norax/runtime/core.py"] == (70.0, 48.0)
     assert critical["norax/runtime/capability_registry.py"] == (100.0, 100.0)
     assert critical["norax/runtime/cognition.py"] == (100.0, 100.0)
+    assert critical["norax/runtime/delivery.py"] == (100.0, 100.0)
     assert critical["norax/runtime/turn_pipeline.py"] == (48.0, 34.0)
     assert critical["norax/runtime/lifecycle.py"] == (74.0, 71.0)
     assert critical["norax/runtime/operations.py"] == (100.0, 100.0)
     assert critical["norax/runtime/health.py"] == (100.0, 100.0)
+    assert critical["norax/runtime/history.py"] == (100.0, 100.0)
+    assert critical["norax/runtime/model_management.py"] == (100.0, 100.0)
+    assert critical["norax/runtime/session.py"] == (100.0, 100.0)
     assert critical["norax/runtime/validation.py"] == (100.0, 100.0)
     assert critical["norax/observability/log.py"] == (80.0, 62.0)
+    assert critical["norax/prompt/assembler.py"] == (100.0, 100.0)
     assert "norax/gateway_client/__init__.py" in critical
     assert "norax/mcp/server.py" in critical
     assert "norax/a2a/server.py" in critical
     assert critical["norax/a2a/client.py"] == (97.0, 89.0)
     assert "norax/dispatch/browser.py" in critical
+    assert critical["norax/dispatch/deep_research.py"] == (100.0, 100.0)
+    assert critical["norax/dispatch/idempotency.py"] == (100.0, 100.0)
     assert "norax/memory/index.py" in critical
     assert critical["norax/memory/causal_graph.py"] == (98.0, 93.0)
     assert critical["norax/memory/hebbian.py"] == (90.0, 79.0)

@@ -1,4 +1,4 @@
-"""Executable links for retry, idempotency, protocol signing, and redaction."""
+"""Executable links for retry, protocol signing, and redaction."""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ import pytest
 from norax.observability.retry import with_retry
 from norax.remote.protocol import new_token, sign, token_hash, verify
 from norax.runtime.backoff import ExponentialBackoff, retry_with_backoff
-from norax.runtime.idempotency import IdempotencyGuard
 from norax.safety.secrets import redact
 
 
@@ -86,37 +85,6 @@ def test_observability_retry_rejects_invalid_delay_without_sleeping() -> None:
     with pytest.raises(ValueError, match="finite non-negative"):
         asyncio.run(with_retry(operation, delays_ms=[float("nan")]))
     assert calls == 0
-
-
-def test_idempotency_key_is_stable_and_stale_locks_are_reaped(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    now = 100.0
-    monkeypatch.setattr("norax.runtime.idempotency.time.monotonic", lambda: now)
-    guard = IdempotencyGuard(stale_timeout_sec=10)
-    acquired, key = guard.acquire("sync", {"b": 2, "a": 1})
-    assert acquired
-    assert guard.acquire("sync", {"a": 1, "b": 2}) == (False, key)
-    assert guard.stats() == {"running": 1, "total_allowed": 1, "total_blocked": 1}
-
-    now = 111.0
-    assert not guard.is_running("sync", {"a": 1, "b": 2})
-    assert guard.acquire("sync", {"a": 1, "b": 2}) == (True, key)
-    guard.release(key)
-    assert guard.running_tasks() == []
-
-
-def test_idempotency_guard_has_no_hidden_one_hour_lease(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    now = 100.0
-    monkeypatch.setattr("norax.runtime.idempotency.time.monotonic", lambda: now)
-    guard = IdempotencyGuard()
-    assert guard.acquire("long-audit", {"scope": "repo"})[0] is True
-
-    now += 365 * 24 * 3600
-
-    assert guard.is_running("long-audit", {"scope": "repo"}) is True
 
 
 def test_tool_circuit_recovery_resets_backoff_for_a_new_outage(

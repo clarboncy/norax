@@ -11,11 +11,18 @@ from typing import Any
 
 from .. import commands as cmd_mod
 from ..context.window import RollingWindow
+from ..safety.secrets import redact
 from ._mixin import RuntimeAccessMixin
 
 log = logging.getLogger("norax.runtime.core")
 
 _CANONICAL_WINDOW_BUDGET_TOKENS = 256_000
+_MAX_COMMAND_ERROR_CHARS = 500
+
+
+def _safe_command_error(error: BaseException) -> str:
+    """Return a bounded diagnostic that is safe for replies, events, and logs."""
+    return str(redact(f"{type(error).__name__}: {error}"))[:_MAX_COMMAND_ERROR_CHARS]
 
 
 class SessionMixin(RuntimeAccessMixin):
@@ -32,7 +39,9 @@ class SessionMixin(RuntimeAccessMixin):
         if re.fullmatch(r"[A-Za-z0-9_-]{1,128}", channel_id):
             safe = channel_id
         else:
-            slug = "".join(c if c.isalnum() or c in "-_" else "_" for c in channel_id)[:64]
+            slug = "".join(
+                c if c.isascii() and (c.isalnum() or c in "-_") else "_" for c in channel_id
+            )[:64]
             digest = hashlib.sha256(channel_id.encode("utf-8")).hexdigest()[:16]
             safe = f"{slug or 'channel'}-{digest}"
         return base / f"{safe}.json"
@@ -62,19 +71,28 @@ class SessionMixin(RuntimeAccessMixin):
         try:
             w.save(self._window_path(channel_id))
         except Exception as e:  # noqa: BLE001
-            log.warning("window_persist.failed channel=%s err=%r", channel_id, e)
+            log.warning(
+                "window_persist.failed channel=%s err=%s",
+                channel_id,
+                _safe_command_error(e),
+            )
 
     def _reset_window(self, channel_id: str) -> bool:
-        existed = channel_id in self._windows
-        self._windows.pop(channel_id, None)
-        # Also delete the persisted file.
+        in_memory = channel_id in self._windows
+        persisted = False
+        # Delete durable state before forgetting the in-memory copy. If unlink
+        # fails, retaining the live copy prevents an apparent reset that comes
+        # back after the next load or process restart.
         try:
             p = self._window_path(channel_id)
-            if p.exists():
+            persisted = p.exists() or p.is_symlink()
+            if persisted:
                 p.unlink()
         except Exception as e:  # noqa: BLE001
-            log.warning("window_reset.unlink_failed err=%r", e)
-        return existed
+            log.warning("window_reset.unlink_failed err=%s", _safe_command_error(e))
+            return False
+        self._windows.pop(channel_id, None)
+        return in_memory or persisted
 
     def _dump_window(self, channel_id: str, half: bool = False) -> dict | None:
         """Dump this channel's rolling body context to sleep/.
@@ -108,8 +126,7 @@ class SessionMixin(RuntimeAccessMixin):
             ]
             for cid, task in active_tasks:
                 self._stop_channels.add(cid)
-                if self._active_turn_tasks.get(cid) is task:
-                    self._active_turn_tasks.pop(cid, None)
+                self._active_turn_tasks.pop(cid, None)
                 queue = self._turn_queues.pop(cid, None)
                 if queue:
                     self._turn_work_count = max(0, self._turn_work_count - len(queue))
@@ -119,15 +136,14 @@ class SessionMixin(RuntimeAccessMixin):
         active_task = self._active_turn_tasks.get(channel_id)
         if active_task is not None and not active_task.done():
             self._stop_channels.add(channel_id)
-            if self._active_turn_tasks.get(channel_id) is active_task:
-                self._active_turn_tasks.pop(channel_id, None)
+            self._active_turn_tasks.pop(channel_id, None)
             queue = self._turn_queues.pop(channel_id, None)
             if queue:
                 self._turn_work_count = max(0, self._turn_work_count - len(queue))
                 queue.clear()
             active_task.cancel()
             return True
-        if active_task is not None and self._active_turn_tasks.get(channel_id) is active_task:
+        if active_task is not None:
             self._active_turn_tasks.pop(channel_id, None)
         self._stop_channels.discard(channel_id)
         return False
@@ -160,8 +176,9 @@ class SessionMixin(RuntimeAccessMixin):
             }
         if self._episodic is not None:
             stats["episodic"] = self._episodic.stats()
-        if hasattr(self, "_hebbian"):
-            stats["hebbian_turns"] = self._hebbian.turn_count
+        hebbian = getattr(self, "_hebbian", None)
+        if hebbian is not None:
+            stats["hebbian_turns"] = hebbian.turn_count
         return stats
 
     def _build_runtime_handle(self) -> cmd_mod.RuntimeHandle:
@@ -209,13 +226,14 @@ class SessionMixin(RuntimeAccessMixin):
         try:
             result = await cmd_mod.handle(pc, env, rt)
         except Exception as e:  # noqa: BLE001
-            log.exception("command.%s failed", pc.name)
+            diagnostic = _safe_command_error(e)
+            log.error("command.%s failed error=%s", pc.name, diagnostic)
             self.metrics.brain_errors.labels(where=f"cmd.{pc.name}").inc()
             await self.events.append(
                 "cmd.error",
-                {"name": pc.name, "err": repr(e), "user": env.sender.id},
+                {"name": pc.name, "err": diagnostic, "user": env.sender.id},
             )
-            result = cmd_mod.CommandResult(reply=f"Command `/{pc.name}` failed: {e}")
+            result = cmd_mod.CommandResult(reply=f"Command `/{pc.name}` failed: {diagnostic}")
 
         await self.events.append(
             "cmd",
@@ -239,8 +257,12 @@ class SessionMixin(RuntimeAccessMixin):
         if result.post_send is not None and delivered:
             try:
                 await result.post_send()
-            except Exception:  # noqa: BLE001
-                log.exception("command.post_send failed: %s", pc.name)
+            except Exception as e:  # noqa: BLE001
+                log.error(
+                    "command.post_send failed name=%s error=%s",
+                    pc.name,
+                    _safe_command_error(e),
+                )
         elif result.post_send is not None:
             log.error("command.post_send suppressed because reply delivery failed: %s", pc.name)
 
@@ -276,24 +298,41 @@ class SessionMixin(RuntimeAccessMixin):
         )
 
         # Reuse the text-mode ParsedCommand + handle() path.
-        pc_args = args.get("args") or []
+        raw_args = args.get("args")
+        if raw_args is None:
+            pc_args: list[object] = []
+        elif isinstance(raw_args, (list, tuple)):
+            pc_args = list(raw_args)
+        else:
+            pc_args = [raw_args]
         # Drop None entries (optional params that weren't supplied).
-        pc_args = [a for a in pc_args if a is not None and a != ""]
-        pc = cmd_mod.ParsedCommand(name=name, args=list(pc_args), raw=f"/{name}")
+        normalized_args = [str(a) for a in pc_args if a is not None and a != ""]
+        pc = cmd_mod.ParsedCommand(name=name, args=normalized_args, raw=f"/{name}")
 
         rt_handle = self._build_runtime_handle()
         try:
             result = await cmd_mod.handle(pc, env, rt_handle)
         except Exception as e:  # noqa: BLE001
-            log.exception("slash_dispatch.%s failed", name)
+            diagnostic = _safe_command_error(e)
+            log.error("slash_dispatch.%s failed error=%s", name, diagnostic)
             self.metrics.brain_errors.labels(where=f"slash.{name}").inc()
-            return {"reply": f"Command `/{name}` failed: {e}", "post_send": None}
+            await self.events.append(
+                "cmd.error",
+                {
+                    "name": name,
+                    "err": diagnostic,
+                    "user": principal.id,
+                    "source": "slash",
+                    "channel_id": ctx.get("channel_id"),
+                },
+            )
+            return {"reply": f"Command `/{name}` failed: {diagnostic}", "post_send": None}
 
         await self.events.append(
             "cmd",
             {
                 "name": name,
-                "args": pc_args,
+                "args": normalized_args,
                 "user": principal.id,
                 "tier": principal.tier,
                 "source": "slash",

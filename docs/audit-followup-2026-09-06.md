@@ -66,18 +66,41 @@ No new comparative benchmarks were run during this final audit pass.
   health state. Capability diagnostics are redacted and bounded before storage
   or logging; this work occurs only during state changes, not in model-token or
   tool-dispatch hot loops.
+- Session restore, delivery, and history boundaries now fail closed on corrupt
+  shapes while retaining valid state, preserve cancellation semantics, bound
+  diagnostics, and avoid unnecessary persistence or retry work. The unused
+  duplicate runtime idempotency implementation was removed; the single live
+  dispatch implementation is enforced at 100% line and branch coverage.
+- Model management now preserves provider credentials transactionally across
+  disable/remove failures, clears stale effective-provider state after routing
+  errors, bounds discovery and diagnostics, closes discovery clients, and
+  coalesces asynchronous persistence without losing the final update. Both
+  synchronous and asynchronous failure paths are secret-scrubbed.
+- Firecrawl seed discovery uses the documented v2 top-level Map/Crawl schemas,
+  bounded streamed responses, one client per crawl, finite polling, and remote
+  cancellation on timeout or caller cancellation. Seed discovery is parallel,
+  fault-isolated, same-host constrained, de-duplicated, and reuses crawl output
+  instead of paying for a second fetch.
+- Research persistence and returned connector errors are bounded and
+  secret-scrubbed. Research memory is written privately and atomically, cannot
+  traverse outside its intel directory, and never erases existing knowledge on
+  an empty pass. Externally derived memory, user bodies, and attachment metadata
+  are fenced as untrusted content, including protection against forged closing
+  delimiters. The in-process topic-lock registry is hard-bounded without
+  rejecting overflow work; the process-safe file lock remains authoritative.
 
 ## Verification
 
 `scripts/quality_gate.py` passed on the current source:
 
-- 2,063 tests in the branch-coverage selection, plus three isolated subprocess
+- 2,194 tests in the branch-coverage selection, plus three isolated subprocess
   acceptance tests; 10 desktop-affecting host tests were intentionally excluded.
-- 77.58% statement coverage, 65.71% branch coverage, 74.44% combined coverage;
-  all 40 critical-module floors passed. The aggregate release floors were
+- 78.68% statement coverage, 67.70% branch coverage, 75.77% combined coverage;
+  all 42 critical-module floors passed. The aggregate release floors remain
   ratcheted to 77% statements, 65% branches, and 74% combined.
-- Sixteen focused production modules now have enforced 100% statement and
-  branch coverage, including runtime validation, capability state, health,
+- Twenty-three focused production modules now have enforced 100% statement and
+  branch coverage, including deep research, prompt assembly, model management,
+  session, delivery, history, runtime validation, capability state, health,
   retry, circuit-breaker, watchdog, operations, and cognition boundaries. The
   aggregate is not described as 100%; uncovered behavior remains audit work.
 - Lockfile, systemd units, every shell helper, Ruff lint/format, mypy,

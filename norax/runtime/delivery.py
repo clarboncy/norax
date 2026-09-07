@@ -6,10 +6,18 @@ import logging
 from typing import Any
 
 from ..adapter.reply_tag import parse_reply_tag
+from ..safety.secrets import redact
 from ._mixin import RuntimeAccessMixin
 from .validation import _explicit_result_ok
 
 log = logging.getLogger("norax.runtime.core")
+
+_MAX_DELIVERY_ERROR_CHARS = 500
+
+
+def _delivery_error(error: BaseException) -> str:
+    """Bound and scrub adapter failures before they reach events or logs."""
+    return str(redact(f"{type(error).__name__}: {error}"))[:_MAX_DELIVERY_ERROR_CHARS]
 
 
 class DeliveryMixin(RuntimeAccessMixin):
@@ -29,8 +37,8 @@ class DeliveryMixin(RuntimeAccessMixin):
         """
         try:
             await self.events.append(kind, payload, attrs=attrs)
-        except Exception:  # noqa: BLE001
-            log.error("%s.delivery_event_append_failed", kind, exc_info=True)
+        except Exception as exc:  # noqa: BLE001
+            log.error("%s.delivery_event_append_failed error=%s", kind, _delivery_error(exc))
 
     def _record_outbound_metric(self, *, source: str, delivered: bool) -> None:
         """Keep metrics failures outside the user-visible delivery boundary."""
@@ -39,8 +47,12 @@ class DeliveryMixin(RuntimeAccessMixin):
                 channel=source,
                 ok=str(delivered).lower(),
             ).inc()
-        except Exception:  # noqa: BLE001
-            log.warning("outbound.metric_record_failed source=%s", source, exc_info=True)
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "outbound.metric_record_failed source=%s error=%s",
+                source,
+                _delivery_error(exc),
+            )
 
     async def _send_command_reply(
         self,
@@ -60,7 +72,10 @@ class DeliveryMixin(RuntimeAccessMixin):
         if not self.outbound.has(env.source) or not target:
             log.debug("cmd.no_route source=%s target=%s", env.source, target)
             return False
-        result = await self.outbound.send(env.source, target, text, reply_to=reply_to)
+        try:
+            result = await self.outbound.send(env.source, target, text, reply_to=reply_to)
+        except Exception as exc:  # noqa: BLE001
+            result = {"ok": False, "error": _delivery_error(exc)}
         delivery_ok = _explicit_result_ok(result)
         self._record_outbound_metric(source=env.source, delivered=delivery_ok)
         await self._append_delivery_event(
@@ -73,7 +88,8 @@ class DeliveryMixin(RuntimeAccessMixin):
                 "kind": "cmd",
             },
         )
-        await self._mirror_discord_reply(env, text)
+        if delivery_ok:
+            await self._mirror_discord_reply(env, text)
         return delivery_ok
 
     async def _mirror_discord_reply(self, env, text: str) -> None:
@@ -82,8 +98,8 @@ class DeliveryMixin(RuntimeAccessMixin):
             return
         try:
             await self.agent_os_bridge.broadcast_outbound(text=text.strip())
-        except Exception:  # noqa: BLE001
-            log.debug("agent_os reply_mirror_failed", exc_info=True)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("agent_os reply_mirror_failed error=%s", _delivery_error(exc))
 
     async def _deliver_turn_response(
         self,
@@ -114,8 +130,8 @@ class DeliveryMixin(RuntimeAccessMixin):
             self.metrics.gateway_requests.labels(
                 model=resp.model or self.default_model, status="ok"
             ).inc()
-        except Exception:  # noqa: BLE001 - telemetry must not prevent delivery
-            log.warning("gateway.delivery_metric_record_failed", exc_info=True)
+        except Exception as exc:  # noqa: BLE001 - telemetry must not prevent delivery
+            log.warning("gateway.delivery_metric_record_failed error=%s", _delivery_error(exc))
 
         content = (resp.content or "").strip()
         delivery: dict[str, Any]
@@ -129,8 +145,8 @@ class DeliveryMixin(RuntimeAccessMixin):
                         "state": "intentionally_suppressed",
                         "attempted": False,
                     }
-                except Exception:  # noqa: BLE001
-                    log.debug("stream.sentinel_delete_failed", exc_info=True)
+                except Exception as exc:  # noqa: BLE001
+                    log.debug("stream.sentinel_delete_failed error=%s", _delivery_error(exc))
                     delivery = {
                         "ok": False,
                         "state": "suppression_cleanup_failed",
@@ -166,15 +182,21 @@ class DeliveryMixin(RuntimeAccessMixin):
                             "result": finalized,
                         }
                     )
-                except Exception:  # noqa: BLE001
-                    log.warning("stream.finalize_failed; using direct Discord send", exc_info=True)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning(
+                        "stream.finalize_failed; using direct Discord send error=%s",
+                        _delivery_error(exc),
+                    )
                     if target_channel and self.outbound.has(env.source):
-                        fallback = await self.outbound.send(
-                            env.source,
-                            target_channel,
-                            final_text,
-                            reply_to=reply_to,
-                        )
+                        try:
+                            fallback = await self.outbound.send(
+                                env.source,
+                                target_channel,
+                                final_text,
+                                reply_to=reply_to,
+                            )
+                        except Exception as fallback_exc:  # noqa: BLE001
+                            fallback = {"ok": False, "error": _delivery_error(fallback_exc)}
                         result = (
                             fallback
                             if isinstance(fallback, dict)
@@ -212,7 +234,11 @@ class DeliveryMixin(RuntimeAccessMixin):
         else:
             delivery = await self._emit_reply(env, ctx, resp)
 
-        if content and content not in {"NO_REPLY", "HEARTBEAT_OK"}:
+        if (
+            delivery.get("state") == "delivered"
+            and content
+            and content not in {"NO_REPLY", "HEARTBEAT_OK"}
+        ):
             parsed = parse_reply_tag(content, current_message_id=env.message_id)
             await self._mirror_discord_reply(env, parsed.text)
 
@@ -269,7 +295,10 @@ class DeliveryMixin(RuntimeAccessMixin):
             log.debug("emit_reply.no_target source=%s msg=%s", env.source, env.message_id)
             return {"ok": False, "state": "no_target", "attempted": False}
 
-        result = await self.outbound.send(env.source, target, text_out, reply_to=reply_to)
+        try:
+            result = await self.outbound.send(env.source, target, text_out, reply_to=reply_to)
+        except Exception as exc:  # noqa: BLE001
+            result = {"ok": False, "error": _delivery_error(exc)}
         delivery_ok = _explicit_result_ok(result)
         self._record_outbound_metric(source=env.source, delivered=delivery_ok)
         await self._append_delivery_event(

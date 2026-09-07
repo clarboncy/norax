@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Coroutine
-from typing import Any, TypeVar
+from collections.abc import Callable, Coroutine
+from typing import Any, TypeVar, cast
 
 from .. import commands as cmd_mod
 from ..brain import agent_loop
 from ..brain.policy import memory_k_for_turn
 from ..commands import _is_gpt_56_sol, _supports_max_reasoning
 from ..gateway_client import GatewayClient
+from ..safety.secrets import redact
 from ._mixin import RuntimeAccessMixin
 from .validation import _model_identifier, _provider_identifier
 
@@ -19,7 +20,12 @@ log = logging.getLogger("norax.runtime.core")
 
 _MAX_PROVIDER_DISCOVERY_BYTES = 2 * 1024 * 1024
 _MAX_PROVIDER_DISCOVERY_MODELS = 100
+_MAX_PROVIDER_ERROR_CHARS = 500
 _MutationResult = TypeVar("_MutationResult")
+
+
+def _provider_error(error: BaseException) -> str:
+    return str(redact(f"{type(error).__name__}: {error}"))[:_MAX_PROVIDER_ERROR_CHARS]
 
 
 class ModelManagementMixin(RuntimeAccessMixin):
@@ -99,11 +105,11 @@ class ModelManagementMixin(RuntimeAccessMixin):
     async def _append_provider_event(self, kind: str, payload: dict[str, Any]) -> None:
         try:
             await self.events.append(kind, payload)
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             # The provider transaction is already complete. Event-log health is
             # reported independently and must not turn a successful mutation
             # into a false 502 response that invites a duplicate retry.
-            log.warning("%s.event_append_failed", kind, exc_info=True)
+            log.warning("%s.event_append_failed error=%s", kind, _provider_error(exc))
 
     async def _restore_custom_provider(
         self,
@@ -172,13 +178,14 @@ class ModelManagementMixin(RuntimeAccessMixin):
                 remove = getattr(self.gateway, "remove_provider", None)
                 if was_live and not callable(remove):
                     raise RuntimeError("active gateway does not support dynamic provider removal")
+                remove_provider = cast(Callable[[str], Coroutine[Any, Any, bool]], remove)
                 await asyncio.to_thread(
                     self._provider_store.upsert,
                     clean,
                     api_key if supplied_key is not None else None,
                 )
                 try:
-                    if was_live and (not callable(remove) or not await remove(clean["name"])):
+                    if was_live and not await remove_provider(clean["name"]):
                         raise RuntimeError("active gateway refused to disable the provider")
                 except Exception:
                     await self._restore_custom_provider(clean["name"], previous)
@@ -264,11 +271,12 @@ class ModelManagementMixin(RuntimeAccessMixin):
             remove = getattr(self.gateway, "remove_provider", None)
             if was_live and not callable(remove):
                 raise RuntimeError("active gateway does not support dynamic provider removal")
+            remove_provider = cast(Callable[[str], Coroutine[Any, Any, bool]], remove)
             removed_from_store = await asyncio.to_thread(self._provider_store.remove, clean_name)
             if not removed_from_store:
                 return False
             try:
-                if was_live and (not callable(remove) or not await remove(clean_name)):
+                if was_live and not await remove_provider(clean_name):
                     raise RuntimeError("active gateway refused to remove the provider")
             except Exception:
                 await self._restore_custom_provider(clean_name, previous)
@@ -285,7 +293,11 @@ class ModelManagementMixin(RuntimeAccessMixin):
             try:
                 self._effective_provider = route_for(model)[0]
             except Exception as exc:  # noqa: BLE001
-                log.warning("gateway.model_selection_route_failed: %r", exc)
+                fallback = getattr(self.gateway, "default_provider", None)
+                self._effective_provider = (
+                    fallback if isinstance(fallback, str) and fallback else "unknown"
+                )
+                log.warning("gateway.model_selection_route_failed: %s", _provider_error(exc))
         log.info("default_model set to %s", model)
         # Schedule persistence off the event loop. The fsync inside
         # atomic_write_text can block for milliseconds; doing it inline
@@ -386,8 +398,8 @@ class ModelManagementMixin(RuntimeAccessMixin):
             self._provider_store.set_runtime_setting("default_model", model)
             log.info("persisted default_model=%s to private runtime settings", model)
             return True
-        except Exception:  # noqa: BLE001
-            log.exception("failed to persist default_model")
+        except Exception as exc:  # noqa: BLE001
+            log.error("failed to persist default_model error=%s", _provider_error(exc))
             return False
 
     def _persist_default_model_async(self, model: str) -> bool:
@@ -423,8 +435,12 @@ class ModelManagementMixin(RuntimeAccessMixin):
                         selected,
                     )
                     log.info("persisted default_model=%s to private runtime settings", selected)
-                except Exception:  # noqa: BLE001
-                    log.exception("failed to persist default_model=%s", selected)
+                except Exception as exc:  # noqa: BLE001
+                    log.error(
+                        "failed to persist default_model=%s error=%s",
+                        selected,
+                        _provider_error(exc),
+                    )
 
         task = loop.create_task(_persist_pending(), name="persist-default-model")
         self._default_model_persist_task = task
@@ -442,7 +458,7 @@ class ModelManagementMixin(RuntimeAccessMixin):
                 return
             error = completed.exception()
             if error is not None:
-                log.error("default-model persistence task crashed: %r", error)
+                log.error("default-model persistence task crashed: %s", _provider_error(error))
 
         task.add_done_callback(_finished)
         return True
