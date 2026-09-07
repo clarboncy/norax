@@ -8,7 +8,7 @@ import httpx
 import pytest
 import respx
 
-from norax.dispatch import Caller, Dispatcher, DispatchError
+from norax.dispatch import Caller, Dispatcher, DispatchError, web_common
 from norax.dispatch import tools as tool_mod
 from norax.dispatch.budget import BudgetEnforcer, Caps
 from norax.dispatch.idempotency import IdempotencyCache
@@ -463,7 +463,7 @@ async def test_dispatch_write_and_edit(tmp_path: Path):
 @respx.mock
 async def test_dispatch_web_fetch(monkeypatch):
     monkeypatch.setattr(
-        "norax.dispatch.tools.socket.getaddrinfo",
+        "norax.dispatch.web_common.socket.getaddrinfo",
         lambda *_args: [(2, 1, 6, "", ("93.184.216.34", 443))],
     )
     respx.get("https://example.test/hi").mock(return_value=httpx.Response(200, text="hello there"))
@@ -492,7 +492,7 @@ async def test_dispatch_web_fetch_blocks_private_network_targets():
 @respx.mock
 async def test_dispatch_web_fetch_revalidates_redirects(monkeypatch):
     monkeypatch.setattr(
-        "norax.dispatch.tools.socket.getaddrinfo",
+        "norax.dispatch.web_common.socket.getaddrinfo",
         lambda *_args: [(2, 1, 6, "", ("93.184.216.34", 443))],
     )
     respx.get("https://example.test/start").mock(
@@ -512,7 +512,7 @@ async def test_dispatch_web_fetch_revalidates_redirects(monkeypatch):
 @respx.mock
 async def test_dispatch_web_fetch_reports_http_error_as_failure(monkeypatch):
     monkeypatch.setattr(
-        "norax.dispatch.tools.socket.getaddrinfo",
+        "norax.dispatch.web_common.socket.getaddrinfo",
         lambda *_args: [(2, 1, 6, "", ("93.184.216.34", 443))],
     )
     respx.get("https://example.test/missing").mock(
@@ -527,6 +527,48 @@ async def test_dispatch_web_fetch_reports_http_error_as_failure(monkeypatch):
     assert not r.ok
     assert r.result["error"] == "http_status"
     assert r.result["status"] == 404
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_web_fetch_scrubs_and_bounds_http_error_body(monkeypatch):
+    monkeypatch.setattr(
+        web_common.socket,
+        "getaddrinfo",
+        lambda *_args: [(2, 1, 6, "", ("93.184.216.34", 443))],
+    )
+    secret = "sk-" + "x" * 30
+    respx.get("https://example.test/error").mock(
+        return_value=httpx.Response(500, text=secret + "y" * 8_000)
+    )
+
+    result = await tool_mod._web_fetch_direct(url="https://example.test/error")
+
+    assert result["error"] == "http_status"
+    assert secret not in result["detail"]
+    assert "<REDACTED:openai_key>" in result["detail"]
+    assert len(result["detail"]) <= 4_000
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_web_fetch_scrubs_and_bounds_request_diagnostic(monkeypatch):
+    monkeypatch.setattr(
+        web_common.socket,
+        "getaddrinfo",
+        lambda *_args: [(2, 1, 6, "", ("93.184.216.34", 443))],
+    )
+    secret = "sk-" + "x" * 30
+    respx.get("https://example.test/protocol").mock(
+        side_effect=httpx.ProtocolError(secret + "z" * 1_000)
+    )
+
+    result = await tool_mod._web_fetch_direct(url="https://example.test/protocol")
+
+    assert result["error"] == "request_error"
+    assert secret not in result["detail"]
+    assert "<REDACTED:openai_key>" in result["detail"]
+    assert len(result["detail"]) <= 500
 
 
 @pytest.mark.asyncio
@@ -555,7 +597,7 @@ async def test_web_fetch_uses_firecrawl_only_after_thin_public_html(monkeypatch)
     monkeypatch.setattr(tool_mod, "_web_fetch_direct", direct)
     monkeypatch.setattr(tool_mod, "_firecrawl_scrape", firecrawl)
     monkeypatch.setattr(
-        tool_mod.socket,
+        web_common.socket,
         "getaddrinfo",
         lambda *_args: [(2, 1, 6, "", ("93.184.216.34", 443))],
     )

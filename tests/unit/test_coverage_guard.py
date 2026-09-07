@@ -215,7 +215,10 @@ def test_default_critical_policy_covers_runtime_and_external_protocol_boundaries
     assert critical["norax/a2a/client.py"] == (97.0, 89.0)
     assert "norax/dispatch/browser.py" in critical
     assert critical["norax/dispatch/deep_research.py"] == (100.0, 100.0)
+    assert critical["norax/dispatch/firecrawl.py"] == (100.0, 100.0)
     assert critical["norax/dispatch/idempotency.py"] == (100.0, 100.0)
+    assert critical["norax/dispatch/input_coercion.py"] == (100.0, 100.0)
+    assert critical["norax/dispatch/web_common.py"] == (100.0, 100.0)
     assert "norax/memory/index.py" in critical
     assert critical["norax/memory/causal_graph.py"] == (98.0, 93.0)
     assert critical["norax/memory/hebbian.py"] == (90.0, 79.0)

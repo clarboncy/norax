@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import stat
 from collections.abc import AsyncIterator
@@ -10,9 +11,169 @@ from typing import Any, cast
 
 import httpx
 import pytest
+import respx
 
 from norax.dispatch import deep_research as research
-from norax.dispatch import tools
+from norax.dispatch import firecrawl, tools
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_firecrawl_scrape_v2_success_and_normalization(monkeypatch) -> None:
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "private")
+    route = respx.post(firecrawl._FIRECRAWL_API_URL).mock(
+        return_value=httpx.Response(
+            200,
+            headers={"content-length": "not-a-number"},
+            json={
+                "success": True,
+                "data": {
+                    "markdown": "  abcdef  ",
+                    "metadata": {
+                        "title": " Page ",
+                        "sourceURL": "https://docs.example/final",
+                    },
+                },
+            },
+        )
+    )
+
+    result = await firecrawl._firecrawl_scrape("https://docs.example/start", 3)
+
+    assert result == {
+        "ok": True,
+        "markdown": "abc",
+        "truncated": True,
+        "source_url": "https://docs.example/final",
+        "title": "Page",
+    }
+    request = route.calls.last.request
+    assert request.url == firecrawl._FIRECRAWL_API_URL
+    assert request.headers["authorization"] == "Bearer private"
+    assert json.loads(request.content) == {
+        "url": "https://docs.example/start",
+        "formats": ["markdown"],
+        "onlyMainContent": True,
+    }
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize(
+    ("response", "expected"),
+    [
+        (httpx.Response(200, content=b"not-json"), "firecrawl_bad_response"),
+        (httpx.Response(200, json=[]), "firecrawl_failed"),
+        (httpx.Response(200, json={"success": False}), "firecrawl_failed"),
+        (
+            httpx.Response(200, json={"success": True, "data": "bad"}),
+            "firecrawl_bad_response",
+        ),
+        (
+            httpx.Response(200, json={"success": True, "data": {"markdown": []}}),
+            "firecrawl_bad_response",
+        ),
+        (
+            httpx.Response(200, json={"success": True, "data": {"markdown": "  "}}),
+            "firecrawl_empty",
+        ),
+    ],
+)
+async def test_firecrawl_scrape_rejects_bad_response_shapes(
+    monkeypatch,
+    response: httpx.Response,
+    expected: str,
+) -> None:
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "private")
+    respx.post(firecrawl._FIRECRAWL_API_URL).mock(return_value=response)
+    result = await firecrawl._firecrawl_scrape("https://docs.example", 100)
+    assert result["error"] == expected
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_firecrawl_scrape_bounds_streams_and_scrubs_remote_failures(monkeypatch) -> None:
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "private")
+
+    class OversizedStream(httpx.AsyncByteStream):
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            yield b"x" * firecrawl._FIRECRAWL_RESPONSE_MAX_BYTES
+            yield b"x"
+
+    respx.post(firecrawl._FIRECRAWL_API_URL).mock(
+        return_value=httpx.Response(200, stream=OversizedStream())
+    )
+    oversized = await firecrawl._firecrawl_scrape("https://docs.example", 100)
+    assert oversized["error"] == "firecrawl_response_too_large"
+
+    secret = "sk-" + "x" * 30
+    respx.post(firecrawl._FIRECRAWL_API_URL).mock(
+        return_value=httpx.Response(502, json={"error": secret})
+    )
+    failed = await firecrawl._firecrawl_scrape("https://docs.example", 100)
+    assert failed["error"] == "firecrawl_failed"
+    assert secret not in str(failed)
+    assert "<REDACTED:openai_key>" in str(failed)
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    [
+        (httpx.ReadTimeout("slow"), "firecrawl_timeout"),
+        (httpx.ConnectError("sk-" + "x" * 30), "firecrawl_request_error"),
+    ],
+)
+async def test_firecrawl_scrape_contains_transport_failures(
+    monkeypatch,
+    failure: Exception,
+    expected: str,
+) -> None:
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "private")
+    respx.post(firecrawl._FIRECRAWL_API_URL).mock(side_effect=failure)
+    result = await firecrawl._firecrawl_scrape("https://docs.example", 100)
+    assert result["error"] == expected
+    assert "sk-" not in str(result)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_firecrawl_scrape_handles_unconfigured_oversized_and_minimal_metadata(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("FIRECRAWL_API_KEY", raising=False)
+    assert (await firecrawl._firecrawl_scrape("https://docs.example", 100))["error"] == (
+        "firecrawl_not_configured"
+    )
+
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "private")
+    respx.post(firecrawl._FIRECRAWL_API_URL).mock(
+        return_value=httpx.Response(
+            200,
+            headers={"content-length": str(firecrawl._FIRECRAWL_RESPONSE_MAX_BYTES + 1)},
+            content=b"{}",
+        )
+    )
+    oversized = await firecrawl._firecrawl_scrape("https://docs.example", 100)
+    assert oversized["error"] == "firecrawl_response_too_large"
+
+    respx.post(firecrawl._FIRECRAWL_API_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "success": True,
+                "data": {"markdown": "body", "metadata": ["bad"]},
+            },
+        )
+    )
+    minimal = await firecrawl._firecrawl_scrape("https://docs.example", 100)
+    assert minimal == {
+        "ok": True,
+        "markdown": "body",
+        "truncated": False,
+        "source_url": "https://docs.example",
+    }
 
 
 @pytest.mark.asyncio
@@ -24,7 +185,7 @@ async def test_firecrawl_request_accepts_documented_top_level_shapes_and_scrubs_
         return httpx.Response(200, json={"status": "completed", "data": []})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(success_handler)) as client:
-        data, error = await tools._firecrawl_request(
+        data, error = await firecrawl._firecrawl_request(
             client,
             "GET",
             "crawl/job-id",
@@ -38,7 +199,7 @@ async def test_firecrawl_request_accepts_documented_top_level_shapes_and_scrubs_
         return httpx.Response(500, json={"error": secret})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(failure_handler)) as client:
-        data, error = await tools._firecrawl_request(
+        data, error = await firecrawl._firecrawl_request(
             client,
             "POST",
             "map",
@@ -73,7 +234,7 @@ async def test_firecrawl_request_rejects_malformed_or_oversized_responses(
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(lambda _request: response)
     ) as client:
-        data, error = await tools._firecrawl_request(
+        data, error = await firecrawl._firecrawl_request(
             client,
             "POST",
             "map",
@@ -92,7 +253,7 @@ async def test_firecrawl_request_rejects_invalid_path_timeout_and_transport_erro
         raise AssertionError("invalid API path must be rejected before transport")
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(unexpected_request)) as client:
-        _, invalid = await tools._firecrawl_request(
+        _, invalid = await firecrawl._firecrawl_request(
             client,
             "GET",
             "../secret",
@@ -110,7 +271,7 @@ async def test_firecrawl_request_rejects_invalid_path_timeout_and_transport_erro
             raise error
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-            data, error = await tools._firecrawl_request(
+            data, error = await firecrawl._firecrawl_request(
                 client,
                 "GET",
                 "crawl/job",
@@ -132,7 +293,7 @@ async def test_firecrawl_request_bounds_streams_and_tolerates_bad_length_header(
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(bad_length_handler)) as client:
-        data, error = await tools._firecrawl_request(
+        data, error = await firecrawl._firecrawl_request(
             client,
             "POST",
             "map",
@@ -145,14 +306,14 @@ async def test_firecrawl_request_bounds_streams_and_tolerates_bad_length_header(
 
     class OversizedStream(httpx.AsyncByteStream):
         async def __aiter__(self) -> AsyncIterator[bytes]:
-            yield b"x" * tools._FIRECRAWL_RESPONSE_MAX_BYTES
+            yield b"x" * firecrawl._FIRECRAWL_RESPONSE_MAX_BYTES
             yield b"x"
 
     async def oversized_handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, stream=OversizedStream())
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(oversized_handler)) as client:
-        data, error = await tools._firecrawl_request(
+        data, error = await firecrawl._firecrawl_request(
             client,
             "GET",
             "crawl/job",
@@ -167,7 +328,7 @@ async def test_firecrawl_request_bounds_streams_and_tolerates_bad_length_header(
 @pytest.mark.asyncio
 async def test_firecrawl_post_handles_configuration_and_reuses_request_helper(monkeypatch) -> None:
     monkeypatch.delenv("FIRECRAWL_API_KEY", raising=False)
-    data, error = await tools._firecrawl_post("map", {})
+    data, error = await firecrawl._firecrawl_post("map", {})
     assert data is None
     assert error == {"ok": False, "error": "firecrawl_not_configured"}
 
@@ -187,8 +348,8 @@ async def test_firecrawl_post_handles_configuration_and_reuses_request_helper(mo
         return {"success": True}, None
 
     monkeypatch.setenv("FIRECRAWL_API_KEY", "private")
-    monkeypatch.setattr(tools, "_firecrawl_request", fake_request)
-    data, error = await tools._firecrawl_post("map", {"url": "https://docs.example"})
+    monkeypatch.setattr(firecrawl, "_firecrawl_request", fake_request)
+    data, error = await firecrawl._firecrawl_post("map", {"url": "https://docs.example"})
     assert data == {"success": True}
     assert error is None
     assert calls == [("POST", "map", {"url": "https://docs.example"}, True)]
@@ -206,22 +367,22 @@ async def test_firecrawl_map_never_proxies_private_target_and_normalizes_v2_link
         called = True
         return None, None
 
-    monkeypatch.setattr(tools, "_firecrawl_post", forbidden_post)
+    monkeypatch.setattr(firecrawl, "_firecrawl_post", forbidden_post)
     monkeypatch.setattr(
-        tools,
+        firecrawl,
         "_web_fetch_url_error",
         lambda *_args, **_kwargs: asyncio.sleep(0, result="private target"),
     )
-    result = await tools._firecrawl_map("http://127.0.0.1/private")
+    result = await firecrawl._firecrawl_map("http://127.0.0.1/private")
     assert result["error"] == "url_not_allowed"
     assert called is False
 
     monkeypatch.setattr(
-        tools,
+        firecrawl,
         "_web_fetch_url_error",
         lambda *_args, **_kwargs: asyncio.sleep(0, result=None),
     )
-    assert (await tools._firecrawl_map("https://docs.example", limit=True))["error"] == (
+    assert (await firecrawl._firecrawl_map("https://docs.example", limit=True))["error"] == (
         "firecrawl_map_limit_invalid"
     )
 
@@ -250,8 +411,8 @@ async def test_firecrawl_map_never_proxies_private_target_and_normalizes_v2_link
             ],
         }, None
 
-    monkeypatch.setattr(tools, "_firecrawl_post", fake_post)
-    result = await tools._firecrawl_map("https://docs.example", limit=2)
+    monkeypatch.setattr(firecrawl, "_firecrawl_post", fake_post)
+    result = await firecrawl._firecrawl_map("https://docs.example", limit=2)
     assert result == {
         "ok": True,
         "links": ["https://docs.example/guide", "https://docs.example/api"],
@@ -270,15 +431,15 @@ async def test_firecrawl_map_never_proxies_private_target_and_normalizes_v2_link
 async def test_firecrawl_map_handles_empty_configuration_backend_and_malformed_links(
     monkeypatch,
 ) -> None:
-    assert (await tools._firecrawl_map(""))["error"] == "firecrawl_map_url_required"
+    assert (await firecrawl._firecrawl_map(""))["error"] == "firecrawl_map_url_required"
     monkeypatch.delenv("FIRECRAWL_API_KEY", raising=False)
-    assert (await tools._firecrawl_map("https://docs.example"))["error"] == (
+    assert (await firecrawl._firecrawl_map("https://docs.example"))["error"] == (
         "firecrawl_not_configured"
     )
 
     monkeypatch.setenv("FIRECRAWL_API_KEY", "private")
     monkeypatch.setattr(
-        tools,
+        firecrawl,
         "_web_fetch_url_error",
         lambda *_args, **_kwargs: asyncio.sleep(0, result=None),
     )
@@ -286,14 +447,14 @@ async def test_firecrawl_map_handles_empty_configuration_backend_and_malformed_l
     async def failed_post(*_args: Any, **_kwargs: Any) -> tuple[None, dict]:
         return None, {"ok": False, "error": "backend_down"}
 
-    monkeypatch.setattr(tools, "_firecrawl_post", failed_post)
-    assert (await tools._firecrawl_map("https://docs.example"))["error"] == "backend_down"
+    monkeypatch.setattr(firecrawl, "_firecrawl_post", failed_post)
+    assert (await firecrawl._firecrawl_map("https://docs.example"))["error"] == "backend_down"
 
     async def malformed_post(*_args: Any, **_kwargs: Any) -> tuple[dict, None]:
         return {"links": "not-a-list"}, None
 
-    monkeypatch.setattr(tools, "_firecrawl_post", malformed_post)
-    assert await tools._firecrawl_map("https://docs.example") == {
+    monkeypatch.setattr(firecrawl, "_firecrawl_post", malformed_post)
+    assert await firecrawl._firecrawl_map("https://docs.example") == {
         "ok": True,
         "links": [],
         "items": [],
@@ -310,14 +471,14 @@ async def test_firecrawl_map_handles_empty_configuration_backend_and_malformed_l
             ]
         }, None
 
-    monkeypatch.setattr(tools, "_firecrawl_post", mixed_post)
-    result = await tools._firecrawl_map("https://docs.example")
+    monkeypatch.setattr(firecrawl, "_firecrawl_post", mixed_post)
+    result = await firecrawl._firecrawl_map("https://docs.example")
     assert result["links"] == ["https://docs.example/valid"]
 
 
 def test_firecrawl_crawl_pages_are_bounded_deduplicated_and_protocol_normalized() -> None:
     huge = "evidence " * 10_000
-    pages = tools._firecrawl_crawl_pages(
+    pages = firecrawl._firecrawl_crawl_pages(
         [
             {
                 "markdown": huge,
@@ -336,12 +497,12 @@ def test_firecrawl_crawl_pages_are_bounded_deduplicated_and_protocol_normalized(
         "https://docs.example/b",
     ]
     assert pages[0]["title"] == "A"
-    assert len(pages[0]["text"]) == tools._FIRECRAWL_PAGE_TEXT_MAX_CHARS
+    assert len(pages[0]["text"]) == firecrawl._FIRECRAWL_PAGE_TEXT_MAX_CHARS
 
 
 def test_firecrawl_crawl_pages_rejects_malformed_container_and_rows() -> None:
-    assert tools._firecrawl_crawl_pages({}, page_limit=2) == []
-    pages = tools._firecrawl_crawl_pages(
+    assert firecrawl._firecrawl_crawl_pages({}, page_limit=2) == []
+    pages = firecrawl._firecrawl_crawl_pages(
         [
             "bad-row",
             {},
@@ -389,16 +550,16 @@ async def test_firecrawl_crawl_uses_one_client_and_documented_v2_protocol(monkey
         kwargs["transport"] = httpx.MockTransport(handler)
         return original_client(*args, **kwargs)
 
-    monkeypatch.setattr(tools.httpx, "AsyncClient", client_factory)
+    monkeypatch.setattr(firecrawl.httpx, "AsyncClient", client_factory)
     monkeypatch.setattr(
-        tools,
+        firecrawl,
         "_web_fetch_url_error",
         lambda *_args, **_kwargs: asyncio.sleep(0, result=None),
     )
-    monkeypatch.setattr(tools, "_firecrawl_pause", lambda *_args: asyncio.sleep(0))
+    monkeypatch.setattr(firecrawl, "_firecrawl_pause", lambda *_args: asyncio.sleep(0))
     monkeypatch.setenv("FIRECRAWL_API_KEY", "private")
 
-    result = await tools._firecrawl_crawl("https://docs.example", limit=3, timeout=40)
+    result = await firecrawl._firecrawl_crawl("https://docs.example", limit=3, timeout=40)
 
     assert result["ok"] is True
     assert result["status"] == "completed"
@@ -423,21 +584,21 @@ async def test_firecrawl_crawl_timeout_cancels_remote_job(monkeypatch) -> None:
         raise AssertionError("deadline must expire before a poll")
 
     monkeypatch.setattr(
-        tools.httpx,
+        firecrawl.httpx,
         "AsyncClient",
         lambda *args, **kwargs: original_client(
             *args, transport=httpx.MockTransport(handler), **kwargs
         ),
     )
     monkeypatch.setattr(
-        tools,
+        firecrawl,
         "_web_fetch_url_error",
         lambda *_args, **_kwargs: asyncio.sleep(0, result=None),
     )
-    monkeypatch.setattr(tools, "_FIRECRAWL_CRAWL_MIN_TIMEOUT", 0.0)
+    monkeypatch.setattr(firecrawl, "_FIRECRAWL_CRAWL_MIN_TIMEOUT", 0.0)
     monkeypatch.setenv("FIRECRAWL_API_KEY", "private")
 
-    result = await tools._firecrawl_crawl("https://docs.example", timeout=0)
+    result = await firecrawl._firecrawl_crawl("https://docs.example", timeout=0)
 
     assert result["ok"] is True
     assert result["status"] == "timed_out"
@@ -463,7 +624,7 @@ async def test_firecrawl_crawl_caller_cancellation_cancels_remote_job(monkeypatc
         await asyncio.Event().wait()
 
     monkeypatch.setattr(
-        tools.httpx,
+        firecrawl.httpx,
         "AsyncClient",
         lambda *args, **kwargs: original_client(
             *args, transport=httpx.MockTransport(handler), **kwargs
@@ -473,11 +634,11 @@ async def test_firecrawl_crawl_caller_cancellation_cancels_remote_job(monkeypatc
     async def safe_url(*_args: Any, **_kwargs: Any) -> None:
         return None
 
-    monkeypatch.setattr(tools, "_web_fetch_url_error", safe_url)
-    monkeypatch.setattr(tools, "_firecrawl_pause", blocking_sleep)
+    monkeypatch.setattr(firecrawl, "_web_fetch_url_error", safe_url)
+    monkeypatch.setattr(firecrawl, "_firecrawl_pause", blocking_sleep)
     monkeypatch.setenv("FIRECRAWL_API_KEY", "private")
 
-    task = asyncio.create_task(tools._firecrawl_crawl("https://docs.example", timeout=40))
+    task = asyncio.create_task(firecrawl._firecrawl_crawl("https://docs.example", timeout=40))
     await sleeping.wait()
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -511,15 +672,15 @@ async def test_firecrawl_crawl_repeated_cancellation_still_settles_cleanup(monke
 
     monkeypatch.setenv("FIRECRAWL_API_KEY", "private")
     monkeypatch.setattr(
-        tools,
+        firecrawl,
         "_web_fetch_url_error",
         lambda *_args, **_kwargs: asyncio.sleep(0, result=None),
     )
-    monkeypatch.setattr(tools, "_firecrawl_request", request)
-    monkeypatch.setattr(tools, "_firecrawl_pause", pause)
-    monkeypatch.setattr(tools, "_cancel_firecrawl_crawl", cleanup)
+    monkeypatch.setattr(firecrawl, "_firecrawl_request", request)
+    monkeypatch.setattr(firecrawl, "_firecrawl_pause", pause)
+    monkeypatch.setattr(firecrawl, "_cancel_firecrawl_crawl", cleanup)
 
-    task = asyncio.create_task(tools._firecrawl_crawl("https://docs.example", timeout=40))
+    task = asyncio.create_task(firecrawl._firecrawl_crawl("https://docs.example", timeout=40))
     await sleep_started.wait()
     task.cancel()
     await cleanup_started.wait()
@@ -534,22 +695,22 @@ async def test_firecrawl_crawl_repeated_cancellation_still_settles_cleanup(monke
 @pytest.mark.asyncio
 async def test_firecrawl_crawl_rejects_bad_inputs_without_network(monkeypatch) -> None:
     monkeypatch.setattr(
-        tools,
+        firecrawl,
         "_web_fetch_url_error",
         lambda *_args, **_kwargs: asyncio.sleep(0, result=None),
     )
-    assert (await tools._firecrawl_crawl(""))["error"] == "firecrawl_crawl_url_required"
-    assert (await tools._firecrawl_crawl("https://docs.example", limit=True))["error"] == (
+    assert (await firecrawl._firecrawl_crawl(""))["error"] == "firecrawl_crawl_url_required"
+    assert (await firecrawl._firecrawl_crawl("https://docs.example", limit=True))["error"] == (
         "firecrawl_crawl_limit_invalid"
     )
-    assert (await tools._firecrawl_crawl("https://docs.example", timeout=float("nan")))[
+    assert (await firecrawl._firecrawl_crawl("https://docs.example", timeout=float("nan")))[
         "error"
     ] == "firecrawl_crawl_timeout_invalid"
-    assert (await tools._firecrawl_crawl("https://docs.example", timeout=cast(Any, "40")))[
+    assert (await firecrawl._firecrawl_crawl("https://docs.example", timeout=cast(Any, "40")))[
         "error"
     ] == ("firecrawl_crawl_timeout_invalid")
     monkeypatch.delenv("FIRECRAWL_API_KEY", raising=False)
-    assert (await tools._firecrawl_crawl("https://docs.example"))["error"] == (
+    assert (await firecrawl._firecrawl_crawl("https://docs.example"))["error"] == (
         "firecrawl_not_configured"
     )
 
@@ -560,14 +721,14 @@ async def test_firecrawl_crawl_rejects_unsafe_submission_errors_and_missing_ids(
 ) -> None:
     monkeypatch.setenv("FIRECRAWL_API_KEY", "private")
     monkeypatch.setattr(
-        tools,
+        firecrawl,
         "_web_fetch_url_error",
         lambda *_args, **_kwargs: asyncio.sleep(0, result="private target"),
     )
-    assert (await tools._firecrawl_crawl("http://127.0.0.1"))["error"] == "url_not_allowed"
+    assert (await firecrawl._firecrawl_crawl("http://127.0.0.1"))["error"] == "url_not_allowed"
 
     monkeypatch.setattr(
-        tools,
+        firecrawl,
         "_web_fetch_url_error",
         lambda *_args, **_kwargs: asyncio.sleep(0, result=None),
     )
@@ -575,14 +736,16 @@ async def test_firecrawl_crawl_rejects_unsafe_submission_errors_and_missing_ids(
     async def failed_submission(*_args: Any, **_kwargs: Any) -> tuple[None, dict]:
         return None, {"ok": False, "error": "submission_failed"}
 
-    monkeypatch.setattr(tools, "_firecrawl_request", failed_submission)
-    assert (await tools._firecrawl_crawl("https://docs.example"))["error"] == ("submission_failed")
+    monkeypatch.setattr(firecrawl, "_firecrawl_request", failed_submission)
+    assert (await firecrawl._firecrawl_crawl("https://docs.example"))["error"] == (
+        "submission_failed"
+    )
 
     async def missing_id(*_args: Any, **_kwargs: Any) -> tuple[dict, None]:
         return {"success": True, "id": "x" * 257}, None
 
-    monkeypatch.setattr(tools, "_firecrawl_request", missing_id)
-    assert (await tools._firecrawl_crawl("https://docs.example"))["error"] == (
+    monkeypatch.setattr(firecrawl, "_firecrawl_request", missing_id)
+    assert (await firecrawl._firecrawl_crawl("https://docs.example"))["error"] == (
         "firecrawl_crawl_no_id"
     )
 
@@ -606,14 +769,14 @@ async def test_firecrawl_crawl_handles_terminal_remote_statuses(monkeypatch, sta
 
     monkeypatch.setenv("FIRECRAWL_API_KEY", "private")
     monkeypatch.setattr(
-        tools,
+        firecrawl,
         "_web_fetch_url_error",
         lambda *_args, **_kwargs: asyncio.sleep(0, result=None),
     )
-    monkeypatch.setattr(tools, "_firecrawl_pause", lambda *_args: asyncio.sleep(0))
-    monkeypatch.setattr(tools, "_firecrawl_request", request)
+    monkeypatch.setattr(firecrawl, "_firecrawl_pause", lambda *_args: asyncio.sleep(0))
+    monkeypatch.setattr(firecrawl, "_firecrawl_request", request)
 
-    result = await tools._firecrawl_crawl("https://docs.example", timeout=40)
+    result = await firecrawl._firecrawl_crawl("https://docs.example", timeout=40)
 
     assert calls == ["POST", "GET"]
     assert result["status"] == status
@@ -628,11 +791,11 @@ async def test_firecrawl_crawl_handles_terminal_remote_statuses(monkeypatch, sta
 async def test_firecrawl_crawl_survives_intermediate_status_and_poll_error(monkeypatch) -> None:
     monkeypatch.setenv("FIRECRAWL_API_KEY", "private")
     monkeypatch.setattr(
-        tools,
+        firecrawl,
         "_web_fetch_url_error",
         lambda *_args, **_kwargs: asyncio.sleep(0, result=None),
     )
-    monkeypatch.setattr(tools, "_firecrawl_pause", lambda *_args: asyncio.sleep(0))
+    monkeypatch.setattr(firecrawl, "_firecrawl_pause", lambda *_args: asyncio.sleep(0))
     statuses = iter(["queued", "completed"])
 
     async def completing_request(
@@ -645,8 +808,8 @@ async def test_firecrawl_crawl_survives_intermediate_status_and_poll_error(monke
             return {"success": True, "id": "job-progress"}, None
         return {"status": next(statuses), "data": []}, None
 
-    monkeypatch.setattr(tools, "_firecrawl_request", completing_request)
-    result = await tools._firecrawl_crawl("https://docs.example", timeout=40)
+    monkeypatch.setattr(firecrawl, "_firecrawl_request", completing_request)
+    result = await firecrawl._firecrawl_crawl("https://docs.example", timeout=40)
     assert result == {
         "ok": True,
         "crawl_id": "job-progress",
@@ -669,8 +832,8 @@ async def test_firecrawl_crawl_survives_intermediate_status_and_poll_error(monke
             return None, {"ok": False, "error": "transport"}
         return {"status": "cancelled"}, None
 
-    monkeypatch.setattr(tools, "_firecrawl_request", failing_poll)
-    result = await tools._firecrawl_crawl("https://docs.example", timeout=40)
+    monkeypatch.setattr(firecrawl, "_firecrawl_request", failing_poll)
+    result = await firecrawl._firecrawl_crawl("https://docs.example", timeout=40)
     assert result["error"] == "firecrawl_crawl_poll_failed"
     assert result["crawl_id"] == "job-poll-error"
     assert methods == ["POST", "GET", "DELETE"]
@@ -682,13 +845,13 @@ async def test_firecrawl_crawl_deadline_after_pause_and_cleanup_failure_are_boun
 ) -> None:
     monkeypatch.setenv("FIRECRAWL_API_KEY", "private")
     monkeypatch.setattr(
-        tools,
+        firecrawl,
         "_web_fetch_url_error",
         lambda *_args, **_kwargs: asyncio.sleep(0, result=None),
     )
-    monkeypatch.setattr(tools, "_FIRECRAWL_CRAWL_MIN_TIMEOUT", 0.0)
+    monkeypatch.setattr(firecrawl, "_FIRECRAWL_CRAWL_MIN_TIMEOUT", 0.0)
     clock = iter([0.0, 0.0, 2.0])
-    monkeypatch.setattr(tools, "time", SimpleNamespace(monotonic=lambda: next(clock)))
+    monkeypatch.setattr(firecrawl, "time", SimpleNamespace(monotonic=lambda: next(clock)))
 
     methods: list[str] = []
 
@@ -705,11 +868,11 @@ async def test_firecrawl_crawl_deadline_after_pause_and_cleanup_failure_are_boun
     async def cleanup_failure(*_args: Any, **_kwargs: Any) -> None:
         raise httpx.ConnectError("offline")
 
-    monkeypatch.setattr(tools, "_firecrawl_request", request)
-    monkeypatch.setattr(tools, "_firecrawl_pause", lambda *_args: asyncio.sleep(0))
-    monkeypatch.setattr(tools, "_cancel_firecrawl_crawl", cleanup_failure)
+    monkeypatch.setattr(firecrawl, "_firecrawl_request", request)
+    monkeypatch.setattr(firecrawl, "_firecrawl_pause", lambda *_args: asyncio.sleep(0))
+    monkeypatch.setattr(firecrawl, "_cancel_firecrawl_crawl", cleanup_failure)
 
-    result = await tools._firecrawl_crawl("https://docs.example", timeout=1)
+    result = await firecrawl._firecrawl_crawl("https://docs.example", timeout=1)
 
     assert result["ok"] is True
     assert result["status"] == "timed_out"
@@ -718,7 +881,7 @@ async def test_firecrawl_crawl_deadline_after_pause_and_cleanup_failure_are_boun
 
 @pytest.mark.asyncio
 async def test_firecrawl_pause_yields_without_blocking() -> None:
-    await tools._firecrawl_pause(0)
+    await firecrawl._firecrawl_pause(0)
 
 
 @pytest.mark.asyncio
@@ -747,7 +910,7 @@ async def test_seed_discovery_is_parallel_deduplicated_and_falls_back(monkeypatc
             ],
         }
 
-    monkeypatch.setattr(tools, "_firecrawl_map", fake_map)
+    monkeypatch.setattr(firecrawl, "_firecrawl_map", fake_map)
     candidates, notes = await research._seed_sources(
         [
             "https://one.example",
@@ -781,7 +944,7 @@ async def test_seed_discovery_bounds_work_and_isolates_connector_failures(monkey
             raise RuntimeError("connector exploded")
         return {"ok": True, "links": [f"{url}/agent-guide"]}
 
-    monkeypatch.setattr(tools, "_firecrawl_map", fake_map)
+    monkeypatch.setattr(firecrawl, "_firecrawl_map", fake_map)
     candidates, notes = await research._seed_sources(
         [
             "https://healthy.example",
@@ -815,7 +978,7 @@ async def test_seed_discovery_handles_legacy_empty_and_malformed_map_results(mon
             "items": ["bad", {"url": "https://other.example/foreign"}],
         }
 
-    monkeypatch.setattr(tools, "_firecrawl_map", fake_map)
+    monkeypatch.setattr(firecrawl, "_firecrawl_map", fake_map)
     candidates, notes = await research._seed_sources(
         [
             "http://[invalid",
@@ -857,7 +1020,7 @@ async def test_exhaustive_seed_falls_back_and_keeps_partial_crawl_pages(monkeypa
             ],
         }
 
-    monkeypatch.setattr(tools, "_firecrawl_crawl", fake_crawl)
+    monkeypatch.setattr(firecrawl, "_firecrawl_crawl", fake_crawl)
     candidates, notes = await research._seed_sources(
         [
             "https://nondict.example",
@@ -909,7 +1072,7 @@ async def test_exhaustive_seed_reuses_prefetched_crawl_text_without_second_fetch
     async def forbidden_fetch(**_kwargs: Any) -> dict:
         raise AssertionError("prefetched crawl content must not be fetched twice")
 
-    monkeypatch.setattr(tools, "_firecrawl_crawl", fake_crawl)
+    monkeypatch.setattr(firecrawl, "_firecrawl_crawl", fake_crawl)
     monkeypatch.setattr(tools, "t_web_search", fake_search)
     monkeypatch.setattr(tools, "t_web_fetch", forbidden_fetch)
 

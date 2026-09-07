@@ -573,12 +573,8 @@ async def _seed_sources(
     Returns ``(candidates, notes)``: candidate dicts compatible with
     :func:`_pick_sources` plus human-readable notes about what was skipped.
     """
-    from .tools import (
-        _dedupe_rich,
-        _firecrawl_crawl,
-        _firecrawl_map,
-        _normalize_search_url,
-    )
+    from .firecrawl import _firecrawl_crawl, _firecrawl_map
+    from .tools import _dedupe_rich, _normalize_search_url
 
     seen = set(state.get("seen_urls", []))
     seen.update(excluded_urls or ())
